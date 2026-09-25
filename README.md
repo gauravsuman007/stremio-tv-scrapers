@@ -67,6 +67,11 @@ case of a legitimate burst against a THIRD-PARTY host during channel
 resolution (`resolveHesgoal`, `resolveEpicsports`), which pacing on
 ntv.st's own pagination cannot help with.
 
+The channel list and the live-events rail refresh independently once
+imported into stremio-tv (twice daily and hourly by default), each on its
+own user-settable interval -- see "Config and tasks are optional" in
+AGENTS.md for how that's declared.
+
 ## [`scrapers/iptv-org.mts`](./scrapers/iptv-org.mts) — iptv-org
 
 A second worked example, ported from stremio-tv's own built-in copy: a

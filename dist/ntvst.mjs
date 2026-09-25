@@ -355,15 +355,17 @@ const CHANNEL_RESOLVE_CONCURRENCY = 12;
 //: flat 250ms between page requests -- confirmed empirically to clear the
 //: entire ~12k-channel catalogue (120+ pages) with zero 429s -- avoids
 //: tripping it in the first place, which is cheaper and more reliable than
-//: recovering from it after the fact.
-const CHANNEL_PAGE_PACING_MS = 250;
-async function fetchAllChannels() {
+//: recovering from it after the fact. Configurable (see `configSchema`
+//: below) since a different deployment may sit behind a different network
+//: path to ntv.st and need more, or could afford less.
+const DEFAULT_CHANNEL_PAGE_PACING_MS = 250;
+async function fetchAllChannels(pacingMs) {
     const all = [];
     let offset = 0;
     let first = true;
     while (true) {
         if (!first)
-            await new Promise((r) => setTimeout(r, CHANNEL_PAGE_PACING_MS));
+            await new Promise((r) => setTimeout(r, pacingMs));
         first = false;
         const data = await fetchJson(`${CHANNEL_INDEX_URL}?limit=${CHANNEL_PAGE_SIZE}&offset=${offset}`);
         if (!data.success)
@@ -378,8 +380,8 @@ async function fetchAllChannels() {
     }
     return all;
 }
-async function buildChannels() {
-    const raw = await fetchAllChannels();
+async function buildChannels(pacingMs) {
+    const raw = await fetchAllChannels(pacingMs);
     const streams = await mapWithConcurrency(raw, CHANNEL_RESOLVE_CONCURRENCY, resolveChannelStream);
     const channels = [];
     for (let i = 0; i < raw.length; i++) {
@@ -494,24 +496,96 @@ async function buildEventsRail(server = DEFAULT_MATCH_SERVER) {
     }
     return { channels: eventChannels.map((e) => e.channel), rails };
 }
-// --- entry point ---------------------------------------------------------
+// --- entry point -----------------------------------------------------------
+/**
+ * User-settable knobs, shown in Settings > Live TV > Sources next to a gear
+ * icon beside "NTVSTREAM" once this is imported. The two intervals are the
+ * reason `tasks` below exists at all: the full channel list is large and
+ * slow to rebuild, so it defaults to twice a day, while the live-events
+ * rail is cheap and time-sensitive (a fixture can start mid-day), so it
+ * defaults to hourly -- independently refreshable, on the schedule each one
+ * actually needs.
+ */
+const configSchema = [
+    {
+        key: "channelsIntervalMinutes",
+        label: "Channel list refresh interval (minutes)",
+        type: "number",
+        default: 720,
+        min: 30,
+        help: "How often the full 24/7 channel catalogue is re-scraped. This is the slow, expensive fetch -- there is rarely a reason to run it more than a couple of times a day."
+    },
+    {
+        key: "eventsIntervalMinutes",
+        label: "Live events refresh interval (minutes)",
+        type: "number",
+        default: 60,
+        min: 5,
+        help: "How often the live sporting-events rail is refreshed. Kept separate from the channel list above since fixtures start and end throughout the day."
+    },
+    {
+        key: "pagePacingMs",
+        label: "Channel-list page pacing (ms)",
+        type: "number",
+        default: DEFAULT_CHANNEL_PAGE_PACING_MS,
+        min: 0,
+        max: 5000,
+        help: "Delay between channel-list page requests. Confirmed empirically that 250ms clears the whole catalogue with zero 429s from ntv.st's rate limiter -- lower this only if a specific deployment's network path can safely go faster."
+    }
+];
+/*
+    A CACHE, NOT A RE-FETCH ON EVERY CALL.
+
+    build() used to fetch both halves fresh every time it ran. Now that each
+    half has its OWN task and its OWN refresh interval (see configSchema
+    above), build() instead reads whatever the tasks last put here --
+    populating either half itself, on first use, if a task has not run yet
+    (e.g. right after this scraper is first loaded, before the host's
+    scheduler's first tick).
+*/
+let channelsCache = null;
+let eventsCache = null;
+const tasks = [
+    {
+        id: "channels",
+        label: "Refresh channel list",
+        intervalConfigKey: "channelsIntervalMinutes",
+        async run(ctx) {
+            const pacingMs = Number(ctx.config.pagePacingMs ?? DEFAULT_CHANNEL_PAGE_PACING_MS);
+            channelsCache = await buildChannels(pacingMs);
+        }
+    },
+    {
+        id: "events",
+        label: "Refresh live events",
+        intervalConfigKey: "eventsIntervalMinutes",
+        async run() {
+            eventsCache = await buildEventsRail();
+        }
+    }
+];
 async function build() {
-    // Sequential, not Promise.all: both hit ntv.st's own host, and running
-    // them concurrently doubles the request pressure that trips its rate
-    // limiter (see CHANNEL_PAGE_PACING_MS above) for no real time saved --
-    // buildEventsRail's own request volume is small next to buildChannels'.
-    const channels = await buildChannels();
-    const events = await buildEventsRail();
+    // Sequential, not Promise.all, when both are missing: both hit ntv.st's
+    // own host, and running them concurrently doubles the request pressure
+    // that trips its rate limiter (see pagePacingMs above) for no real time
+    // saved -- buildEventsRail's own request volume is small next to
+    // buildChannels'.
+    if (!channelsCache)
+        channelsCache = await buildChannels(DEFAULT_CHANNEL_PAGE_PACING_MS);
+    if (!eventsCache)
+        eventsCache = await buildEventsRail();
     return {
-        channels: [...channels, ...events.channels],
-        rails: events.rails,
+        channels: [...channelsCache, ...eventsCache.channels],
+        rails: eventsCache.rails
     };
 }
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.1.0",
-    build,
+    version: "1.2.0",
+    configSchema,
+    tasks,
+    build
 };
 // -------------------------------------------------------------------------
 // Manual test: `npx tsx scrapers/ntvst.mts`

@@ -61,6 +61,30 @@ editing**.
    `dist/` is committed" below for why that compiled file, not the source,
    is what actually goes to stremio-tv.
 
+## Config and tasks are optional -- add them only when they earn their keep
+
+The template's `configSchema` and `tasks` (both OPTIONAL, see the template's
+header for the full contract) let your scraper expose user-settable knobs
+-- an interval, a pacing delay -- and split its work into independently
+refreshable, independently schedulable pieces. Most scrapers have one
+uniform refresh rate and need neither; `build()` alone is a complete,
+correct scraper, and stremio-tv's Settings page simply shows no gear icon
+next to one that declares nothing. Reach for `tasks` only when your source
+genuinely has parts that change at different rates and are worth refreshing
+on different schedules -- [`scrapers/ntvst.mts`](scrapers/ntvst.mts) is the
+worked example: its full channel list defaults to a twice-daily refresh,
+its live-events rail to hourly, each independently, via two
+`configSchema` interval fields and two `tasks` entries.
+
+If you do add either: a task's `run()` is expected to write into a small
+module-level cache that `build()` itself reads from (falling back to
+fetching directly only if a task hasn't run yet -- see `ntvst.mts`'s
+`channelsCache`/`eventsCache`), and a config field's `key` must be
+STABLE -- stremio-tv reconciles stored values against your CURRENT
+`configSchema` on every read (a removed key is dropped, a new one gets its
+`default`, a retyped one is treated as new), so reusing a `key` for a field
+with a different meaning would silently hand it an old, unrelated value.
+
 ## Why `.mts`, and why the output must be `.mjs`
 
 Node decides whether a `.js` file is an ES module or CommonJS from the

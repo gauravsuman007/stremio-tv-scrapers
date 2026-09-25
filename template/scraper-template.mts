@@ -171,6 +171,89 @@ interface ScrapedCatalogue {
     rails?: ScrapedRail[];
 }
 
+/** A value one of this scraper's own config fields can hold. */
+type ScraperConfigValue = string | number | boolean;
+
+/**
+ * One user-settable knob this scraper declares for itself -- an interval, a
+ * pacing delay, a page size, anything the person running a deployment might
+ * reasonably want to change without editing this file. Shown in Settings >
+ * Live TV > Sources next to a gear icon beside this scraper's name,
+ * pre-filled with its CURRENT value (whatever is stored, or `default` if
+ * this deployment has never changed it).
+ *
+ * OPTIONAL -- a scraper with nothing worth exposing simply has no
+ * `configSchema` at all, and gets no gear icon. This is the common case
+ * unless your scraper also declares `tasks` (see below), where at least one
+ * interval field is the whole point.
+ */
+interface ScraperConfigField {
+    /** Stable, unique within THIS scraper's own schema. Never reuse a key
+     *  for a field of a different meaning later -- see "Config values
+     *  survive an update" below for why that matters. */
+    key: string;
+    /** Shown as the field's label in the settings form. */
+    label: string;
+    type: "number" | "string" | "boolean";
+    /** Both this field's starting value on a fresh deployment AND the
+     *  fallback used whenever a stored value no longer matches this field
+     *  (wrong type, or the field is new since the value was last saved). */
+    default: ScraperConfigValue;
+    /** For a `"number"` field only. */
+    min?: number;
+    max?: number;
+    /** A short explanation shown under the field in the settings form. */
+    help?: string;
+}
+
+/** What a task's `run()` is handed. See `ScraperTask` below. */
+interface ScraperTaskContext {
+    /** This scraper's current config values, already reconciled against
+     *  `configSchema` -- read directly, no lookup needed. */
+    config: Record<string, ScraperConfigValue>;
+    /**
+     * Ensures one of THIS SAME scraper's other tasks has run at least once
+     * during this run -- a no-op if it already has, otherwise it runs now
+     * (satisfying that task's own `dependsOn` first). This is how a task
+     * states a real prerequisite without the host needing to guess the
+     * right order, and without your own code needing to call the
+     * prerequisite's logic directly.
+     */
+    runTask(id: string): Promise<void>;
+}
+
+/**
+ * One independently refreshable piece of work, besides the main `build()`.
+ *
+ * OPTIONAL -- most scrapers have a single source of data and need no
+ * `tasks` at all; `build()` alone is a complete, correct scraper. Declare
+ * `tasks` only when your source genuinely has parts that change at
+ * different rates and are worth refreshing on different schedules -- e.g. a
+ * slow full catalogue (twice a day is plenty) alongside a fast-moving
+ * live-events feed (useful refreshed hourly). Each task gets its own "Run
+ * now" button and, via a `configSchema` field, its own user-settable
+ * refresh interval in Settings.
+ */
+interface ScraperTask {
+    /** Stable, unique within this scraper's own `tasks`. */
+    id: string;
+    /** Shown next to this task's "Run now" button and its last-run status. */
+    label: string;
+    /** Ids of this scraper's OTHER tasks that must run first, in order,
+     *  whether this task was triggered by its own schedule or by hand from
+     *  Settings. The host runs each task in the chain at most once per
+     *  invocation -- declaring this is the whole story; you never need to
+     *  reason about ordering yourself. A cycle here is a bug in this file
+     *  and fails loudly rather than hanging. */
+    dependsOn?: string[];
+    /** The key of a `"number"` field in `configSchema`, read as MINUTES
+     *  between automatic runs of this task -- independently of every other
+     *  task this scraper declares. Omit for a task that only ever runs as
+     *  someone else's dependency, or only by hand. */
+    intervalConfigKey?: string;
+    run(ctx: ScraperTaskContext): Promise<void>;
+}
+
 interface Scraper {
     /** Stable, short, lowercase-dashed. Pick it once and do not rename it
      *  after this scraper has shipped -- it is the namespace every id you
@@ -190,8 +273,27 @@ interface Scraper {
      * reapplied. Bump it whenever `build()`'s behaviour changes.
      */
     version?: string;
+    /** OPTIONAL. See `ScraperConfigField` above. */
+    configSchema?: ScraperConfigField[];
+    /** OPTIONAL. See `ScraperTask` above. */
+    tasks?: ScraperTask[];
     build(): Promise<ScrapedCatalogue>;
 }
+
+/*
+    CONFIG VALUES SURVIVE AN UPDATE -- AUTOMATICALLY, FIELD BY FIELD.
+
+    The host stores each scraper's config values keyed by field `key`. When
+    you ship a change to `configSchema` -- add a field, remove one, or
+    change a field's `type` -- nothing here needs to migrate anything by
+    hand: the host reconciles what is stored against your CURRENT schema
+    every time it is read. A key you still declare, of the same type, keeps
+    whatever value was saved; a key you removed is simply dropped; a key
+    that is new, or whose stored value no longer matches its declared type,
+    starts at that field's `default`. This is exactly why `key` must be
+    stable and never reused for a field with a different meaning -- reusing
+    one would silently hand an old value to a field it was never meant for.
+*/
 
 // -------------------------------------------------------------------------
 // Fill in from here down.
@@ -290,6 +392,40 @@ async function build(): Promise<ScrapedCatalogue> {
     };
 }
 
+/**
+ * EXAMPLE configSchema/tasks -- delete both, and the `run()` bodies below,
+ * if your source has one uniform refresh rate; build() alone (above) is
+ * already a complete scraper. Shown here only because "how do these two
+ * connect to build()" is easier to see than to describe: a task's run()
+ * writes into a small module-level cache, and build() reads from that same
+ * cache -- falling back to fetching directly only the very first time,
+ * before either task has ever run (e.g. right after this scraper is first
+ * loaded, before the host's scheduler has had its first tick).
+ */
+let cachedChannels: ScrapedChannel[] | null = null;
+
+const configSchema: ScraperConfigField[] = [
+    {
+        key: "refreshMinutes",
+        label: "Refresh interval (minutes)",
+        type: "number",
+        default: 720,
+        min: 15,
+        help: "How often the channel list is re-scraped."
+    }
+];
+
+const tasks: ScraperTask[] = [
+    {
+        id: "channels",
+        label: "Refresh channel list",
+        intervalConfigKey: "refreshMinutes",
+        async run() {
+            cachedChannels = (await build()).channels;
+        }
+    }
+];
+
 export const myScraper: Scraper = {
     id: SCRAPER_ID,
     name: "My Source",
@@ -297,6 +433,10 @@ export const myScraper: Scraper = {
     // build()'s behaviour changes; delete the line entirely if this
     // scraper is only ever going to be dropped in by hand.
     version: "1.0.0",
+    // Both optional -- delete along with the example block above if this
+    // scraper has nothing worth exposing as a setting.
+    configSchema,
+    tasks,
     build
 };
 
