@@ -48,9 +48,18 @@ editing**.
    that only compiles under weaker settings will fail again the moment it
    reaches stremio-tv's own stricter build, which is the exact failure
    this workflow exists to prevent.
-5. **Hand back `dist/<your-id>.mjs`.** That compiled file -- not the
-   `.mts` source -- is what actually goes to stremio-tv. See "Delivering
-   it" below.
+5. **Set a `version`** on the exported scraper object -- dot-separated
+   integers, e.g. `"1.0.0"`. This is what lets stremio-tv's "Import from
+   GitHub" (see "Delivering it" below) treat a later change as an UPDATE
+   rather than either silently ignoring it or blindly re-copying it every
+   time regardless of whether anything changed. Optional for a scraper only
+   ever dropped in by hand, but there is no reason not to set it. Bump it
+   every time `build()`'s behaviour changes.
+6. **Commit `dist/<your-id>.mjs`.** Unlike most projects, this repository's
+   compiled output is NOT gitignored -- `npm run build` writes it, and it
+   is committed alongside the `.mts` source in the same change. See "Why
+   `dist/` is committed" below for why that compiled file, not the source,
+   is what actually goes to stremio-tv.
 
 ## Why `.mts`, and why the output must be `.mjs`
 
@@ -68,22 +77,54 @@ makes `tsc` check the file against Node's actual ESM module-resolution
 rules, which plain `.ts` does not, catching a class of import mistakes
 `.ts` would silently let through.
 
+## Why `dist/` is committed
+
+stremio-tv's Settings > Live TV > Sources > "Import from GitHub" reads a
+configured repository's `dist/` directory directly, over the GitHub API,
+and drops whatever `.mjs` files it finds straight into that deployment's
+scrapers directory -- no cloning, no build step on that end, because that
+container runs no TypeScript compiler at all (same reason the delivered
+file has to be `.mjs`, not `.ts`/`.mts`). For that importer to see this
+repository's scrapers, the compiled output has to actually be in the
+repository, on the branch being imported -- which is the one thing a
+normal `dist/` convention (gitignored, rebuilt from source on demand)
+would break. So here, `dist/` is tracked: every commit that touches a
+scraper's `.mts` source rebuilds it (`npm run build`) and commits the
+`.mjs` alongside, in the same change. A source commit without its matching
+`dist/` update is a repository in a state the importer cannot use.
+
 ## Delivering it
 
-Two ways stremio-tv accepts a finished scraper (both described in the
+Three ways stremio-tv accepts a finished scraper (all described in the
 template's header -- this is the short version):
 
+- **Import from GitHub, no copying at all.** On the stremio-tv side:
+  Settings > Live TV > Sources > "Import from GitHub", enter this
+  repository (`owner/repo`), a branch, and -- only if this repository is
+  private -- an access token. It fetches every `.mjs` in `dist/`,
+  validates each one the same way a manual drop-in is validated, and
+  writes it in. A LATER re-check of the same repository only replaces a
+  scraper already running when the copy in `dist/` now has a strictly
+  greater `version` than what is loaded -- which is the entire reason step
+  5 above matters. This is the route this repository is built around; the
+  other two remain for when GitHub access isn't the way a scraper is
+  reaching that deployment.
 - **Drop it in, no rebuild.** Copy `dist/<your-id>.mjs` into the
   `scrapers` directory on that deployment's mounted data volume, then
   either restart the container or use the "Reload sources" action on its
   Settings > Live TV > Sources page. It appears immediately, on by
-  default, ranked and checked exactly like any other source. This is the
-  route for everything developed here -- no access to the stremio-tv repo
-  is needed at any point.
+  default, ranked and checked exactly like any other source. Unlike a
+  GitHub import, this always overwrites -- there is no version check,
+  because copying a file in by hand is already a deliberate choice.
 - **Built into the image.** For someone with that repo open: the `.mts`
   source (not the compiled output) becomes `src/scrapers/<your-id>.ts`
   there, added to `BUILTIN` in `src/scrapers.ts`. Needs a rebuild and a
-  redeploy on that side; not something to do from here.
+  redeploy on that side; not something to do from here. A scraper
+  delivered this way can never be replaced by a GitHub import or a
+  drop-in afterward, on purpose -- both routes refuse any id a built-in
+  scraper already claims, so `iptv-org` in this repository
+  ([`scrapers/iptv-org.mts`](scrapers/iptv-org.mts), a reference port of
+  stremio-tv's own built-in copy) can never actually be imported over it.
 
 ## What "zero further editing" means in practice
 
@@ -95,15 +136,21 @@ on the other end. That means, before calling the scraper done:
 - `npm run build` exits with no errors, using this repo's own
   `tsconfig.json` unmodified.
 - The compiled file exists at `dist/<your-id>.mjs` (verify the extension
-  -- a stray `.js` here means the source wasn't actually named `.mts`).
+  -- a stray `.js` here means the source wasn't actually named `.mts`), and
+  it is COMMITTED, not left gitignored -- see "Why `dist/` is committed".
 - `node dist/<your-id>.mjs` runs without throwing an import-time error
   (a quick sanity check that catches, for instance, a top-level await that
   behaves differently once compiled).
 - The exported object's shape matches the template's `Scraper` interface
-  exactly: `id`, `name`, `build()` -- stremio-tv's loader only accepts a
-  module whose `default` export, or one of its named exports, looks like
-  that shape, and silently skips (with a logged reason on that side, which
-  you won't see from here) anything that doesn't.
+  exactly: `id`, `name`, an OPTIONAL `version`, `build()` -- stremio-tv's
+  loader only accepts a module whose `default` export, or one of its named
+  exports, looks like that shape, and silently skips (with a logged reason
+  on that side, which you won't see from here) anything that doesn't.
+- `version` is set and was bumped if this is a change to an existing
+  scraper -- an unbumped version means a later "Import from GitHub" /
+  "Check for updates" on the stremio-tv side sees no update at all and
+  silently keeps running the OLD copy, even though `dist/` now holds
+  something different.
 
 ## Updating the template
 

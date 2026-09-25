@@ -4,14 +4,17 @@ Live-TV/sports scrapers for [stremio-tv](https://github.com/gauravsuman007):
 24/7 channels and live sporting events, scraped straight from a site's own
 CDN with no torrent or debrid step. Each file is a standalone `Scraper`
 (one `build()` function returning a full catalogue) that compiles to a
-plain `.mjs` file and drops straight into a running deployment's mounted
-data volume — no access to that repository needed, no rebuild on its side.
+plain `.mjs` file in [`dist/`](dist), committed (not gitignored) so
+stremio-tv's Settings > Live TV > Sources > "Import from GitHub" can read
+it straight from this repository — no cloning, no manual copying, and a
+later re-check only replaces a scraper here with a genuinely newer one (see
+"Versioning" in AGENTS.md).
 
 **Developing a new one: read [`AGENTS.md`](AGENTS.md) first.** It's the
 full workflow — copy [`template/scraper-template.mts`](template/scraper-template.mts),
-implement `build()`, compile, verify — written so an agent working only in
-this repository can produce a file that plugs into stremio-tv with no
-further editing.
+implement `build()`, set a `version`, compile, verify — written so an agent
+working only in this repository can produce a file that plugs into
+stremio-tv with no further editing.
 
 ## [`scrapers/ntvst.mts`](./scrapers/ntvst.mts) — ntv.st
 
@@ -54,9 +57,27 @@ npx tsx scrapers/ntvst.mts
 ```
 
 Prints the resulting channel/rail counts and the first channel. ntv.st
-rate-limits its own channel index API fairly aggressively after a few
-thousand consecutive requests from one IP — `build()` retries 429s with a
-short backoff, but a full run can still take several minutes.
+rate-limits fairly aggressively under a BURST of back-to-back pagination
+requests -- confirmed empirically, not just from the API's own error
+messages -- so `fetchAllChannels` paces page requests 250ms apart rather
+than firing them as fast as the network allows; that alone was enough to
+clear the entire ~12k-channel catalogue with zero 429s in testing.
+`fetchText`'s retry-with-backoff stays as a safety net for the still-real
+case of a legitimate burst against a THIRD-PARTY host during channel
+resolution (`resolveHesgoal`, `resolveEpicsports`), which pacing on
+ntv.st's own pagination cannot help with.
+
+## [`scrapers/iptv-org.mts`](./scrapers/iptv-org.mts) — iptv-org
+
+A second worked example, ported from stremio-tv's own built-in copy: a
+source that already publishes clean JSON across a handful of small
+endpoints (channels, streams, feeds, logos, countries, a blocklist) rather
+than one that needs reverse-engineering. Useful as a template for a
+similarly well-behaved API even though this exact file can never actually
+be imported into a stremio-tv deployment — its id, `iptv-org`, is already
+claimed by that app's own built-in scraper, and both the GitHub importer
+and a manual drop-in refuse to let anything else use an id a built-in
+scraper already has.
 
 ## The contract
 

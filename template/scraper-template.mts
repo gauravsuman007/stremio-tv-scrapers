@@ -36,9 +36,18 @@
  * `tsc` then also type-checks against Node's ESM resolution rules, which
  * `.ts` does not.
  *
- * Two ways to hand the finished, compiled scraper back -- pick whichever
+ * Three ways to hand the finished, compiled scraper back -- pick whichever
  * fits how you're delivering it:
  *
+ *   * IMPORT FROM GITHUB, NO COPYING AT ALL -- if this scraper lives in a
+ *     repository with a `dist/` directory holding its compiled `.mjs`
+ *     output COMMITTED (not gitignored -- see that repository's own
+ *     AGENTS.md if it has one), Settings > Live TV > Sources > "Import
+ *     from GitHub" reads it directly: enter the repo, an optional branch
+ *     and, for a private repo, an access token, and it is fetched, checked
+ *     and dropped in with no manual copying at all. Set `version` below so
+ *     a later re-check only replaces this scraper when it is genuinely
+ *     newer -- see that field's own comment.
  *   * DROP IT IN, NO REBUILD -- copy the compiled `<your-id>.mjs` into the
  *     `scrapers` directory on the deployment's mounted data volume, then
  *     reload it from Settings > Live TV > Sources > "Reload sources" (or
@@ -46,7 +55,7 @@
  *     checked and ranked exactly like every other source -- no image
  *     rebuild, no redeploy, and no access to this repository needed at
  *     all. This is the route for a scraper built somewhere else and
- *     handed back as a finished file.
+ *     handed back as a finished file, with nowhere to import it from.
  *   * BUILT INTO THE IMAGE -- for someone with the repo open: save this
  *     file (the `.ts`, not the compiled output) as
  *     `src/scrapers/<your-id>.ts`, then in `src/scrapers.ts` add an import
@@ -170,6 +179,17 @@ interface Scraper {
     id: string;
     /** Shown in the Settings sources list. */
     name: string;
+    /**
+     * OPTIONAL, but set it if this scraper will ever be pulled in through
+     * Settings > Live TV > Sources > "Import from GitHub" rather than only
+     * copied in by hand: dot-separated integers, e.g. "1.2.0". A re-import
+     * only ever replaces the copy already running when this is a real
+     * increase over it, segment by segment -- an unversioned file can never
+     * be known to be newer than anything, so leaving this out means a
+     * re-import of this same file is always skipped as "no update", not
+     * reapplied. Bump it whenever `build()`'s behaviour changes.
+     */
+    version?: string;
     build(): Promise<ScrapedCatalogue>;
 }
 
@@ -273,6 +293,10 @@ async function build(): Promise<ScrapedCatalogue> {
 export const myScraper: Scraper = {
     id: SCRAPER_ID,
     name: "My Source",
+    // Optional -- see the Scraper interface above. Bump this whenever
+    // build()'s behaviour changes; delete the line entirely if this
+    // scraper is only ever going to be dropped in by hand.
+    version: "1.0.0",
     build
 };
 
