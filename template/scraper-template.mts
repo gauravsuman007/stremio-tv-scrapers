@@ -62,10 +62,11 @@
  *     and one entry to the `BUILTIN` array:
  *
  *         import { myScraper } from "./scrapers/<your-id>.js";
- *         const BUILTIN: Scraper[] = [iptvOrgScraper, myScraper];
+ *         const BUILTIN: Scraper[] = [myScraper];
  *
  *     Needs a rebuild and a redeploy, worth it only for a source the
- *     deployment should never run without.
+ *     deployment should never run without even after a wiped data volume --
+ *     nothing is built in by default.
  *
  * WHAT YOUR SCRAPER OWES THE REST OF THE SYSTEM
  * -----------------------------------------------

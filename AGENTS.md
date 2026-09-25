@@ -110,12 +110,19 @@ scrapers directory -- no cloning, no build step on that end, because that
 container runs no TypeScript compiler at all (same reason the delivered
 file has to be `.mjs`, not `.ts`/`.mts`). For that importer to see this
 repository's scrapers, the compiled output has to actually be in the
-repository, on the branch being imported -- which is the one thing a
-normal `dist/` convention (gitignored, rebuilt from source on demand)
-would break. So here, `dist/` is tracked: every commit that touches a
-scraper's `.mts` source rebuilds it (`npm run build`) and commits the
-`.mjs` alongside, in the same change. A source commit without its matching
-`dist/` update is a repository in a state the importer cannot use.
+repository, on `main` (the importer always reads `main` -- there is no
+branch parameter) -- which is the one thing a normal `dist/` convention
+(gitignored, rebuilt from source on demand) would break. So here, `dist/`
+is tracked: every commit that touches a scraper's `.mts` source rebuilds
+it (`npm run build`) and commits the `.mjs` alongside, in the same change.
+A source commit without its matching `dist/` update is a repository in a
+state the importer cannot use.
+
+**The import only happens when someone presses the button.** stremio-tv
+does not poll this repository on a schedule or at boot -- once a scraper
+is imported it is read from stremio-tv's own mounted volume at every
+subsequent boot, with no further dependency on GitHub being reachable,
+until "Check for updates" is pressed again by hand.
 
 ## Delivering it
 
@@ -124,15 +131,18 @@ template's header -- this is the short version):
 
 - **Import from GitHub, no copying at all.** On the stremio-tv side:
   Settings > Live TV > Sources > "Import from GitHub", enter this
-  repository (`owner/repo`), a branch, and -- only if this repository is
-  private -- an access token. It fetches every `.mjs` in `dist/`,
-  validates each one the same way a manual drop-in is validated, and
-  writes it in. A LATER re-check of the same repository only replaces a
-  scraper already running when the copy in `dist/` now has a strictly
-  greater `version` than what is loaded -- which is the entire reason step
-  5 above matters. This is the route this repository is built around; the
-  other two remain for when GitHub access isn't the way a scraper is
-  reaching that deployment.
+  repository (`owner/repo`) and -- only if this repository is private --
+  an access token; there is no branch field, it always reads `main`. It
+  fetches every `.mjs` in `dist/`, validates each one the same way a
+  manual drop-in is validated, and writes it in. A LATER re-check of the
+  same repository only replaces a scraper already running when the copy in
+  `dist/` now has a strictly greater `version` than what is loaded --
+  which is the entire reason step 5 above matters. This is the route this
+  repository is built around, and the route both
+  [`scrapers/iptv-org.mts`](scrapers/iptv-org.mts) and
+  [`scrapers/ntvst.mts`](scrapers/ntvst.mts) actually reach a stremio-tv
+  deployment by -- stremio-tv ships with nothing built in, so this is not
+  a fallback route for either of them.
 - **Drop it in, no rebuild.** Copy `dist/<your-id>.mjs` into the
   `scrapers` directory on that deployment's mounted data volume, then
   either restart the container or use the "Reload sources" action on its
@@ -143,12 +153,11 @@ template's header -- this is the short version):
 - **Built into the image.** For someone with that repo open: the `.mts`
   source (not the compiled output) becomes `src/scrapers/<your-id>.ts`
   there, added to `BUILTIN` in `src/scrapers.ts`. Needs a rebuild and a
-  redeploy on that side; not something to do from here. A scraper
-  delivered this way can never be replaced by a GitHub import or a
-  drop-in afterward, on purpose -- both routes refuse any id a built-in
-  scraper already claims, so `iptv-org` in this repository
-  ([`scrapers/iptv-org.mts`](scrapers/iptv-org.mts), a reference port of
-  stremio-tv's own built-in copy) can never actually be imported over it.
+  redeploy on that side; not something to do from here, and not how any
+  scraper in this repository is delivered today -- `BUILTIN` is empty on
+  stremio-tv by default. A scraper delivered this way can never be
+  replaced by a GitHub import or a drop-in afterward, on purpose -- both
+  routes refuse any id a built-in scraper already claims.
 
 ## What "zero further editing" means in practice
 

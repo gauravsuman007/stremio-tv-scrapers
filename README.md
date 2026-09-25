@@ -2,13 +2,17 @@
 
 Live-TV/sports scrapers for [stremio-tv](https://github.com/gauravsuman007):
 24/7 channels and live sporting events, scraped straight from a site's own
-CDN with no torrent or debrid step. Each file is a standalone `Scraper`
-(one `build()` function returning a full catalogue) that compiles to a
-plain `.mjs` file in [`dist/`](dist), committed (not gitignored) so
-stremio-tv's Settings > Live TV > Sources > "Import from GitHub" can read
-it straight from this repository — no cloning, no manual copying, and a
-later re-check only replaces a scraper here with a genuinely newer one (see
-"Versioning" in AGENTS.md).
+CDN with no torrent or debrid step. stremio-tv ships with nothing built
+in — every scraper here, including iptv-org, is how it actually gets its
+live-TV channels. Each file is a standalone `Scraper` (one `build()`
+function returning a full catalogue) that compiles to a plain `.mjs` file
+in [`dist/`](dist), committed (not gitignored) so stremio-tv's Settings >
+Live TV > Sources > "Import from GitHub" can read it straight from this
+repository (always `main` — there is no branch field) — no cloning, no
+manual copying, and a later re-check only replaces a scraper here with a
+genuinely newer one (see "Versioning" in AGENTS.md). stremio-tv does not
+poll this repository on its own; a scraper is only re-fetched when someone
+presses "Check for updates".
 
 **Developing a new one: read [`AGENTS.md`](AGENTS.md) first.** It's the
 full workflow — copy [`template/scraper-template.mts`](template/scraper-template.mts),
@@ -74,15 +78,16 @@ AGENTS.md for how that's declared.
 
 ## [`scrapers/iptv-org.mts`](./scrapers/iptv-org.mts) — iptv-org
 
-A second worked example, ported from stremio-tv's own built-in copy: a
-source that already publishes clean JSON across a handful of small
-endpoints (channels, streams, feeds, logos, countries, a blocklist) rather
-than one that needs reverse-engineering. Useful as a template for a
-similarly well-behaved API even though this exact file can never actually
-be imported into a stremio-tv deployment — its id, `iptv-org`, is already
-claimed by that app's own built-in scraper, and both the GitHub importer
-and a manual drop-in refuse to let anything else use an id a built-in
-scraper already has.
+A real source — this is how a stremio-tv deployment actually gets iptv-org
+channels, imported the same way as ntv.st above — and also a second worked
+example for a source that already publishes clean JSON across a handful of
+small endpoints (channels, streams, feeds, logos, countries, a blocklist)
+rather than one that needs reverse-engineering. Its `iptv:` id prefix
+(instead of the usual `live:iptv-org:`) is a pre-plugin-system legacy
+exception stremio-tv grants to whichever scraper has the id `iptv-org`
+specifically, so an existing deployment's favourites and watch-progress
+rows keep matching once this file is imported — never change this file's
+id away from `iptv-org`.
 
 ## The contract
 

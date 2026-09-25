@@ -1,29 +1,26 @@
 /**
- * iptv-org's own curated, deduplicated JSON -- a second worked example
- * alongside ntvst.mts, this time for a source that already publishes
+ * iptv-org's own curated, deduplicated JSON -- a real source, and also a
+ * worked example alongside ntvst.mts for a source that already publishes
  * clean, well-typed data across several small endpoints rather than one
- * that has to be reverse-engineered. Ported from stremio-tv's own
- * built-in `src/scrapers/iptv-org.ts`, standalone (see
- * docs/scraper-template.ts's contract -- this is the same shape, filled
- * in, with no imports back into that repository).
+ * that has to be reverse-engineered.
  *
- * WHY THIS FILE CAN NEVER ACTUALLY REPLACE stremio-tv's BUILT-IN COPY:
- * stremio-tv ships iptv-org as a BUILT-IN scraper (`src/scrapers/iptv-org.ts`
- * in `BUILTIN`), precisely because it is the one source that deployment
- * cannot do without -- see that repo's AGENTS.md, "A source is a plugin".
- * Both "Import from GitHub" and a manual drop-in refuse to let anything
- * with an id already claimed by a built-in scraper through, on purpose
- * (see stremio-tv's `github-import.ts`), so importing this file changes
- * nothing there: it is kept here as a second reference implementation, not
- * a source anyone is meant to actually pull in. If you want a similarly
- * structured scraper for a DIFFERENT source, copy this file and its id
- * rather than trying to import it as-is.
+ * THIS IS THE ACTUAL iptv-org SOURCE, IMPORTABLE AS-IS. stremio-tv ships
+ * with nothing built in (see that repo's AGENTS.md, "A source is a
+ * plugin") -- iptv-org and ntv.st are both ordinary sources pulled in from
+ * THIS repository via Settings > Live TV > Sources > "Import from GitHub",
+ * same as anything else here. If you want a similarly structured scraper
+ * for a DIFFERENT source, copy this file and give it a different id --
+ * two scrapers sharing an id is refused by both the GitHub importer and a
+ * manual drop-in, first one loaded wins.
  */
 const API = "https://iptv-org.github.io/api";
-//: stremio-tv's real deployment keeps this id-prefix, `iptv:`, as a
-//: pre-plugin-system legacy exception granted only to ITS OWN built-in
-//: copy of this scraper -- carried over here for fidelity to the source
-//: this was ported from, not because it means anything standalone.
+//: stremio-tv's merge step keeps this exact id-prefix, `iptv:`, as a
+//: pre-plugin-system legacy exception granted specifically to whichever
+//: scraper has the id "iptv-org" (by id, not by how it was loaded -- see
+//: that repo's AGENTS.md), so a deployment's existing favourites and
+//: watch-progress rows keep matching once this scraper is imported. NEVER
+//: change this scraper's own id away from "iptv-org" below, or this
+//: exception stops applying and every existing id here becomes unrecognised.
 const PREFIX = "iptv:";
 const FETCH_TIMEOUT_MS = 30_000;
 async function grab(name) {
