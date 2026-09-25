@@ -133,7 +133,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item
     async function run() {
         while (next < items.length) {
             const i = next++;
-            results[i] = await worker(items[i]);
+            results[i] = await worker(items[i]!);
         }
     }
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
@@ -238,11 +238,11 @@ function extractCdnliveStreamUrl(page: string): string | null {
     if (!assembly) return null;
 
     const fragmentNames: string[] = [];
-    for (const m of assembly[1].matchAll(CALL_RE)) fragmentNames.push(m[1]);
+    for (const m of assembly[1]!.matchAll(CALL_RE)) fragmentNames.push(m[1]!);
     if (fragmentNames.length === 0) return null;
 
     const fragments = new Map<string, string>();
-    for (const m of page.matchAll(FRAGMENT_ASSIGN_RE)) fragments.set(m[1], m[2]);
+    for (const m of page.matchAll(FRAGMENT_ASSIGN_RE)) fragments.set(m[1]!, m[2]!);
 
     const parts: string[] = [];
     for (const name of fragmentNames) {
@@ -275,7 +275,7 @@ function cleanHesgoalSlug(rawId: string): string {
 function extractHesgoalStreamUrl(page: string): string | null {
     const match = HESGOAL_STREAM_URL_RE.exec(page);
     if (!match) return null;
-    const url = match[1].replace(/\\\//g, "/");
+    const url = match[1]!.replace(/\\\//g, "/");
     return url.startsWith("http") ? url : null;
 }
 
@@ -400,13 +400,13 @@ async function resolveChannelStream(channel: NtvChannel): Promise<ScrapedStream 
             if (host === "hesgoal.team") {
                 const match = ID_PARAM_RE.exec(channelUrl);
                 if (!match) return null;
-                return await resolveHesgoal(cleanHesgoalSlug(decodeURIComponent(match[1])));
+                return await resolveHesgoal(cleanHesgoalSlug(decodeURIComponent(match[1]!)));
             }
 
             if (host === "epicsports-tv.com") {
                 const match = ID_PARAM_RE.exec(channelUrl);
                 if (!match) return null;
-                return await resolveEpicsports(decodeURIComponent(match[1]).trim());
+                return await resolveEpicsports(decodeURIComponent(match[1]!).trim());
             }
 
             // The small remainder of `hesgoales` on other hosts (e.g.
@@ -465,7 +465,7 @@ async function buildChannels(): Promise<ScrapedChannel[]> {
         const stream = streams[i];
         if (!stream) continue; // dlhd, unrecognised host, or a failed resolve.
 
-        const entry = raw[i];
+        const entry = raw[i]!;
         // Same value used for both id-namespacing input and display name --
         // ntv.st has no other stable per-channel identifier in this
         // response, so the (already-unique, per-backend) resolve key
@@ -520,7 +520,7 @@ async function resolveMatchStreamUrls(server: string, match: NtvMatch): Promise<
     const srcMatch = STREAM_IFRAME_SRC_RE.exec(embedPage);
     if (!srcMatch) return [];
 
-    const streamUrl = extractLivelive24StreamUrl(srcMatch[1]);
+    const streamUrl = extractLivelive24StreamUrl(srcMatch[1]!);
     if (streamUrl) return [streamUrl];
 
     // Not a livelive24.com destination this scraper knows how to unwrap
@@ -556,10 +556,10 @@ async function buildEventsRail(server: string = DEFAULT_MATCH_SERVER): Promise<{
 
     const eventChannels: EventChannel[] = [];
     for (let i = 0; i < matches.length; i++) {
-        const urls = urlsByMatch[i];
+        const urls = urlsByMatch[i]!;
         if (urls.length === 0) continue;
 
-        const match = matches[i];
+        const match = matches[i]!;
         const category = match.category || "uncategorized";
         eventChannels.push({
             category,
@@ -626,7 +626,7 @@ export const ntvStScraper: Scraper = {
 };
 
 // -------------------------------------------------------------------------
-// Manual test: `npx tsx scrapers/ntvst.ts`
+// Manual test: `npx tsx scrapers/ntvst.mts`
 // -------------------------------------------------------------------------
 
 if (import.meta.url === `file://${process.argv[1]}`) {

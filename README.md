@@ -3,12 +3,17 @@
 Live-TV/sports scrapers for [stremio-tv](https://github.com/gauravsuman007):
 24/7 channels and live sporting events, scraped straight from a site's own
 CDN with no torrent or debrid step. Each file is a standalone `Scraper`
-(one `build()` function returning a full catalogue), meant to be dropped
-into that app's `src/scrapers/` and registered in `src/scrapers.ts` — see
-the header comment of [`scrapers/ntvst.ts`](./scrapers/ntvst.ts)'s sibling
-template, `docs/scraper-template.ts` in that repo, for the exact contract.
+(one `build()` function returning a full catalogue) that compiles to a
+plain `.mjs` file and drops straight into a running deployment's mounted
+data volume — no access to that repository needed, no rebuild on its side.
 
-## [`scrapers/ntvst.ts`](./scrapers/ntvst.ts) — ntv.st
+**Developing a new one: read [`AGENTS.md`](AGENTS.md) first.** It's the
+full workflow — copy [`template/scraper-template.mts`](template/scraper-template.mts),
+implement `build()`, compile, verify — written so an agent working only in
+this repository can produce a file that plugs into stremio-tv with no
+further editing.
+
+## [`scrapers/ntvst.mts`](./scrapers/ntvst.mts) — ntv.st
 
 ~10.4k 24/7 live channels plus a live sporting-events rail. ntv.st
 multiplexes three unrelated backends behind one channel list:
@@ -44,8 +49,8 @@ code itself when adapting this to a similar site.
 ### Trying it standalone
 
 ```bash
-npm install --no-save typescript tsx @types/node
-npx tsx scrapers/ntvst.ts
+npm install
+npx tsx scrapers/ntvst.mts
 ```
 
 Prints the resulting channel/rail counts and the first channel. ntv.st
