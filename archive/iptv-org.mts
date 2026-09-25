@@ -1,17 +1,24 @@
 /**
+ * ARCHIVED -- kept for reference only, no longer live.
+ *
+ * This scraper moved into the stremio-tv-plugin-live-tv repository itself
+ * (github.com/gauravsuman007/stremio-tv-plugin-live-tv, `scrapers/iptv-org.mts`),
+ * which now ships it as that plugin's bundled default scraper -- seeded
+ * into a fresh deployment's `scrapers/` directory on load, no GitHub
+ * import needed. This copy is frozen at the point it was moved and is not
+ * maintained here any more; it is not importable through Settings > Live
+ * TV > Sources > "Import from GitHub" either, since only `dist/` (not
+ * `archive/`) is read by that importer, and this file has been pulled out
+ * of `dist/` on purpose. See the live-tv plugin repo's own AGENTS.md/README
+ * for the current version and its update mechanism.
+ *
+ * The rest of this header comment is left as it was when this scraper was
+ * still live here, for context on what it was and how it worked:
+ *
  * iptv-org's own curated, deduplicated JSON -- a real source, and also a
  * worked example alongside ntvst.mts for a source that already publishes
  * clean, well-typed data across several small endpoints rather than one
  * that has to be reverse-engineered.
- *
- * THIS IS THE ACTUAL iptv-org SOURCE, IMPORTABLE AS-IS. stremio-tv ships
- * with nothing built in (see that repo's AGENTS.md, "A source is a
- * plugin") -- iptv-org and ntv.st are both ordinary sources pulled in from
- * THIS repository via Settings > Live TV > Sources > "Import from GitHub",
- * same as anything else here. If you want a similarly structured scraper
- * for a DIFFERENT source, copy this file and give it a different id --
- * two scrapers sharing an id is refused by both the GitHub importer and a
- * manual drop-in, first one loaded wins.
  */
 
 interface ScrapedStream {

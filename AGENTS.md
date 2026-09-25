@@ -138,11 +138,14 @@ template's header -- this is the short version):
   same repository only replaces a scraper already running when the copy in
   `dist/` now has a strictly greater `version` than what is loaded --
   which is the entire reason step 5 above matters. This is the route this
-  repository is built around, and the route both
-  [`scrapers/iptv-org.mts`](scrapers/iptv-org.mts) and
-  [`scrapers/ntvst.mts`](scrapers/ntvst.mts) actually reach a stremio-tv
+  repository is built around, and the route
+  [`scrapers/ntvst.mts`](scrapers/ntvst.mts) actually reaches a stremio-tv
   deployment by -- stremio-tv ships with nothing built in, so this is not
-  a fallback route for either of them.
+  a fallback route for it. (iptv-org used to reach stremio-tv this same
+  way; it has since moved into the stremio-tv-plugin-live-tv repository
+  itself as that plugin's bundled default scraper, and its copy here is
+  archived -- see [`archive/iptv-org.mts`](archive/iptv-org.mts) and the
+  README.)
 - **Drop it in, no rebuild.** Copy `dist/<your-id>.mjs` into the
   `scrapers` directory on that deployment's mounted data volume, then
   either restart the container or use the "Reload sources" action on its
