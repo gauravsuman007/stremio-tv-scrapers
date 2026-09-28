@@ -1,13 +1,23 @@
 # Developing a live-TV scraper for stremio-tv
 
-This repository has no access to [stremio-tv](https://github.com/gauravsuman007/stremio-tv)
-(private) and doesn't need any -- everything the contract requires lives in
-[`template/scraper-template.mts`](template/scraper-template.mts), a copy of
-that repo's own `docs/scraper-template.ts`, kept in sync by hand whenever it
-changes there. Read that file's header comment in full before writing
-anything; it is the actual spec, not a summary of it. This document is the
-workflow around it: how to go from "a source I want to scrape" to a file
-that plugs into a running stremio-tv deployment with **zero further
+This repository has no access to
+[stremio-tv-plugin-live-tv](https://github.com/gauravsuman007/stremio-tv-plugin-live-tv)
+(the actual consumer of a scraper built here) and doesn't need any --
+everything the contract requires lives in
+[`template/scraper-template.mts`](template/scraper-template.mts), a richer,
+example-augmented copy of THAT repo's own `docs/scraper-template.ts` (itself
+a byte-identical copy of its `src/scraper-types.ts` -- the canonical
+`Scraper`/`ScrapedChannel`/`ScrapedRail`/... definitions), kept in sync by
+hand whenever it changes there -- see that repository's own `AGENTS.md`,
+"The contracts this repo sits between, and how they stay linked." (Live TV
+is a *plugin* of the separate, private
+[stremio-tv](https://github.com/gauravsuman007/stremio-tv) core app, not
+built into it -- a scraper here never talks to stremio-tv core directly,
+only to the live-tv plugin, so that repo is the one whose contract actually
+matters here.) Read the template file's header comment in full before
+writing anything; it is the actual spec, not a summary of it. This document
+is the workflow around it: how to go from "a source I want to scrape" to a
+file that plugs into a running stremio-tv deployment with **zero further
 editing**.
 
 ## The workflow, start to finish
@@ -446,9 +456,13 @@ is worth recognising *before* spending a research session on:
 
 ## Updating the template
 
-`template/scraper-template.mts` is a manual copy of stremio-tv's
-`docs/scraper-template.ts`. If a session working in *that* repo changes
-the contract (a new field on `ScrapedChannel`, a new capability like
-`ScrapedRail`), it should update the copy here too, in the same commit or
-close to it -- this file goes stale otherwise, silently, since nothing
-enforces the two staying in sync.
+`template/scraper-template.mts` is a manual copy of
+stremio-tv-plugin-live-tv's `docs/scraper-template.ts` (itself a copy of
+that repo's `src/scraper-types.ts` -- see the chain in that repo's
+`AGENTS.md`). If a session working in *that* repo changes the contract (a
+new field on `ScrapedChannel`, a new capability like `ScrapedRail`, a
+change to the merge/rail-heading/priority rules), it should update the
+copy here too, in the same commit or close to it -- this file goes stale
+otherwise, silently, since nothing enforces the two staying in sync. When
+starting work here, it is worth a quick diff against that repo's
+`docs/scraper-template.ts` to confirm this copy hasn't already drifted.
