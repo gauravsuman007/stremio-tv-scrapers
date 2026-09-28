@@ -622,8 +622,24 @@ const tasks = [
             // refresh rather than a no-op read of the old value. If a
             // `build()`-triggered crawl is already in flight, this still
             // joins it rather than starting a second one.
+            //
+            // ntv.st's own index rate-limits hard enough that a refresh can
+            // still fail outright even after `fetchText`'s own retries --
+            // if it does, the previous (still good) list is restored rather
+            // than left null. Leaving it null would mean every `build()`
+            // call until the NEXT successful refresh has to run a full,
+            // multi-minute cold crawl, and `channels.ts`'s 45s scraper
+            // timeout kills every one of those, so the channel list would
+            // stay empty in a loop instead of just missing one refresh.
+            const previous = channelsCache;
             channelsCache = null;
-            channelsCache = await ensureChannels(pacingMs);
+            try {
+                channelsCache = await ensureChannels(pacingMs);
+            }
+            catch (cause) {
+                channelsCache = previous;
+                throw cause;
+            }
         }
     },
     {
@@ -631,8 +647,15 @@ const tasks = [
         label: "Refresh live events",
         intervalConfigKey: "eventsIntervalMinutes",
         async run() {
+            const previous = eventsCache;
             eventsCache = null;
-            eventsCache = await ensureEvents();
+            try {
+                eventsCache = await ensureEvents();
+            }
+            catch (cause) {
+                eventsCache = previous;
+                throw cause;
+            }
         }
     }
 ];
@@ -652,7 +675,7 @@ async function build() {
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.4.0",
+    version: "1.4.1",
     configSchema,
     tasks,
     build
