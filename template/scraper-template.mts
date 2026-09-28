@@ -150,13 +150,43 @@ interface ScrapedChannel {
     streams: ScrapedStream[];
 }
 
+/*
+    ONE MORE THING THAT HAPPENS TO `name`/`country` CENTRALLY, AFTER
+    `build()` RETURNS: a channel (or a live event -- the same type) whose
+    folded `name`+`country` matches one already in the index, from another
+    scraper (iptv-org's own built-in list included), is not added as a
+    second card. Its `streams` are appended to the EXISTING channel's
+    mirror list instead, each one still remembered as having come from
+    this scraper for the source list's own badge -- you never see this
+    happen and never need to give it a matching key yourself, it just
+    means a channel your scraper returns may end up sharing a card, and a
+    higher score, with someone else's entry rather than getting its own.
+    A non-iptv-org mirror gets a small, deliberately modest preference over
+    an iptv-org one when nothing else (verified liveness, codec) has
+    already told the two apart -- write `name` the way a human would say
+    it (no "(HD)", no "[Backup]") so this actually recognises the channel
+    it is the same as.
+*/
+
 interface ScrapedRail {
     /** A short slug, unique within THIS scraper only, `[a-z0-9-]` and 40
      *  characters or fewer -- e.g. "anime-simulcasts". The final id shown
      *  to a viewer is built centrally as `rail:<your-scraper-id>-<this>`,
      *  so two scrapers can both call theirs "sport" with no collision. */
     id: string;
-    /** Shown as the rail's heading, same as any other rail. */
+    /** Shown as the rail's heading, same as any other rail -- and the ONE
+     *  place two different scrapers deliberately share text rather than
+     *  namespacing away from each other. A rail from this scraper and a
+     *  rail from another whose `heading`, trimmed and case-folded, reads
+     *  the same are merged centrally into a single rail carrying both
+     *  scrapers' channels (deduplicated the same way a repeated channel
+     *  is, see `ScrapedChannel` above) rather than shown as two rails with
+     *  the same title. If your source has a live-events rail, call it
+     *  exactly "Live Events" so it merges with any other scraper's -- a
+     *  viewer wants one events rail with several sources per event, not
+     *  one per scraper. Do NOT do this by accident: a generic heading like
+     *  "Sports" from two unrelated scrapers would merge the same way, so
+     *  pick a heading that only means "merge with me" when you mean it. */
     heading: string;
     /** Ids of channels THIS SAME `build()` call also returned in
      *  `channels`. An id belonging to another scraper, or one this call
