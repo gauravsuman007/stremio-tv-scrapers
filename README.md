@@ -20,7 +20,9 @@ presses "Check for updates".
 full workflow — copy [`template/scraper-template.mts`](template/scraper-template.mts),
 implement `build()`, set a `version`, compile, verify — written so an agent
 working only in this repository can produce a file that plugs into
-stremio-tv with no further editing.
+stremio-tv with no further editing. [`SOURCES.md`](SOURCES.md) tracks every
+source considered — implemented, blocked, possible or untriaged — so a new
+session can pick up the list without re-triaging from scratch.
 
 ## [`scrapers/ntvst.mts`](./scrapers/ntvst.mts) — ntv.st
 

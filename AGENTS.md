@@ -33,21 +33,25 @@ editing**.
    This actually hits the real source and prints a channel/rail count plus
    the first channel found -- confirm the count looks right and the first
    channel has a real `streams[0].url`, not `undefined` or an empty string.
-4. **Compile it** with this repository's own `tsconfig.json`, which mirrors
-   stremio-tv's build flags exactly (`--strict --noUncheckedIndexedAccess`,
-   target/module `ES2022`, `moduleResolution: bundler`):
+4. **Typecheck it locally with this repository's own `tsconfig.json`**,
+   which mirrors stremio-tv's build flags exactly (`--strict
+   --noUncheckedIndexedAccess`, target/module `ES2022`, `moduleResolution:
+   bundler`):
    ```bash
    npm run build
    ```
-   This must exit clean, zero errors. `--noUncheckedIndexedAccess` is the
-   flag every generic TypeScript scraper trips on: it types `array[i]` and
-   every regex capture group (`match[1]`) as `T | undefined`, not `T`.
-   Fix each one for real (narrow with an `if`, or assert with `!` only
-   where a loop bound already guarantees the value exists) -- **never**
-   "fix" a compile error by loosening a flag in `tsconfig.json`. A file
-   that only compiles under weaker settings will fail again the moment it
-   reaches stremio-tv's own stricter build, which is the exact failure
-   this workflow exists to prevent.
+   This must exit clean, zero errors, before you ever push --
+   `--noUncheckedIndexedAccess` is the flag every generic TypeScript
+   scraper trips on: it types `array[i]` and every regex capture group
+   (`match[1]`) as `T | undefined`, not `T`. Fix each one for real (narrow
+   with an `if`, or assert with `!` only where a loop bound already
+   guarantees the value exists) -- **never** "fix" a compile error by
+   loosening a flag in `tsconfig.json`. A file that only compiles under
+   weaker settings will fail again the moment it reaches stremio-tv's own
+   stricter build, which is the exact failure this workflow exists to
+   prevent. **Leave the `dist/` this produced uncommitted** (`git checkout
+   dist`, or just don't `git add` it) -- see "`dist/` is built by CI,
+   never locally" below for why.
 5. **Set a `version`** on the exported scraper object -- dot-separated
    integers, e.g. `"1.0.0"`. This is what lets stremio-tv's "Import from
    GitHub" (see "Delivering it" below) treat a later change as an UPDATE
@@ -55,11 +59,11 @@ editing**.
    time regardless of whether anything changed. Optional for a scraper only
    ever dropped in by hand, but there is no reason not to set it. Bump it
    every time `build()`'s behaviour changes.
-6. **Commit `dist/<your-id>.mjs`.** Unlike most projects, this repository's
-   compiled output is NOT gitignored -- `npm run build` writes it, and it
-   is committed alongside the `.mts` source in the same change. See "Why
-   `dist/` is committed" below for why that compiled file, not the source,
-   is what actually goes to stremio-tv.
+6. **Commit and push the `.mts` source only.** CI builds `dist/<your-id>.mjs`
+   from a clean checkout and commits it back as `github-actions[bot]` --
+   see "`dist/` is built by CI, never locally" below. `git pull` before
+   your NEXT commit to this repository; the bot's `dist/` commit will be
+   ahead of you.
 
 ## Config and tasks are optional -- add them only when they earn their keep
 
@@ -101,7 +105,7 @@ makes `tsc` check the file against Node's actual ESM module-resolution
 rules, which plain `.ts` does not, catching a class of import mistakes
 `.ts` would silently let through.
 
-## Why `dist/` is committed
+## Why `dist/` is committed, and built by CI, never locally
 
 stremio-tv's Settings > Live TV > Sources > "Import from GitHub" reads a
 configured repository's `dist/` directory directly, over the GitHub API,
@@ -113,10 +117,41 @@ repository's scrapers, the compiled output has to actually be in the
 repository, on `main` (the importer always reads `main` -- there is no
 branch parameter) -- which is the one thing a normal `dist/` convention
 (gitignored, rebuilt from source on demand) would break. So here, `dist/`
-is tracked: every commit that touches a scraper's `.mts` source rebuilds
-it (`npm run build`) and commits the `.mjs` alongside, in the same change.
-A source commit without its matching `dist/` update is a repository in a
-state the importer cannot use.
+is tracked, not gitignored.
+
+**But `dist/` is built by CI, never on a developer's or agent's machine.**
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) typechecks and
+builds on every push and pull request, and on a push to `main` commits
+whatever changed in `dist/` back to `main` itself, as `github-actions[bot]`,
+with `[skip ci]` (that commit carries `contents: write` and does not
+retrigger the workflow -- a `GITHUB_TOKEN`-authored push never does, so
+there's no loop to worry about). A pull request only proves the build
+*works*; it does not update `dist/` on that branch. So:
+
+- **Do not run `npm run build` to produce a commit, and do not hand-edit
+  or commit `dist/` yourself.** Commit the `.mts` source only. `npm run
+  build` locally is fine (encouraged, even -- see step 4 above) for
+  confirming the file typechecks before you push; just leave the
+  resulting `dist/` changes uncommitted afterward (`git checkout dist`).
+- **`git pull` before your next commit to this repository.** The bot's
+  `dist/` commit lands on `main` shortly after your push and will be
+  ahead of you; basing a new commit on a stale `main` risks a conflict
+  against a file you were never supposed to touch by hand in the first
+  place.
+- A `.mts` source change pushed to `main` is not actually live for
+  stremio-tv until **both** the bot's `dist/` commit exists on `main`
+  **and** someone presses "Check for updates" on stremio-tv's own Sources
+  page -- see "The import only happens when someone presses the button"
+  below. If you're verifying a fix end-to-end, that means checking
+  `main`'s commit history for the follow-up `Build dist/ [skip ci]`
+  commit before assuming the change reached anyone.
+
+This exactly mirrors how the `stremio-tv-plugin-web-scraper` sibling
+repository builds its own `dist/` -- see that repository's `AGENTS.md` if
+you need the fuller rationale (submodule-pinned contract typechecking,
+version bumps, etc. -- this repository's own `version` field on each
+scraper object plays the same role its `package.json` version does
+there).
 
 **The import only happens when someone presses the button.** stremio-tv
 does not poll this repository on a schedule or at boot -- once a scraper
@@ -165,18 +200,25 @@ template's header -- this is the short version):
 ## What "zero further editing" means in practice
 
 If you're an agent working from this file: the deliverable is judged by
-whether `dist/<your-id>.mjs` can be copied straight into a stremio-tv
-deployment's `scrapers` directory and picked up with **no changes at all**
-on the other end. That means, before calling the scraper done:
+whether `dist/<your-id>.mjs` -- the one CI produces after your commit, not
+one built by hand -- can be copied straight into a stremio-tv deployment's
+`scrapers` directory and picked up with **no changes at all** on the
+other end. That means, before calling the scraper done:
 
-- `npm run build` exits with no errors, using this repo's own
-  `tsconfig.json` unmodified.
-- The compiled file exists at `dist/<your-id>.mjs` (verify the extension
-  -- a stray `.js` here means the source wasn't actually named `.mts`), and
-  it is COMMITTED, not left gitignored -- see "Why `dist/` is committed".
-- `node dist/<your-id>.mjs` runs without throwing an import-time error
-  (a quick sanity check that catches, for instance, a top-level await that
-  behaves differently once compiled).
+- `npm run build` exits with no errors LOCALLY, using this repo's own
+  `tsconfig.json` unmodified -- as a typecheck only. Do not commit the
+  `dist/` this produces (see "`dist/` is built by CI, never locally").
+- After pushing, CI's own build (same command, clean checkout) also
+  succeeds -- check the workflow run, don't just assume a local pass
+  means the same thing happened in CI.
+- The bot's `Build dist/ [skip ci]` follow-up commit lands on `main` (`git
+  pull` and check the log, or check the Actions tab) -- a source commit
+  with no matching `dist/` update yet is a repository mid-flight, not yet
+  in a state stremio-tv's importer can use.
+- `node dist/<your-id>.mjs` (the CI-built copy, pulled after the bot's
+  commit) runs without throwing an import-time error -- a quick sanity
+  check that catches, for instance, a top-level await that behaves
+  differently once compiled.
 - The exported object's shape matches the template's `Scraper` interface
   exactly: `id`, `name`, an OPTIONAL `version`, `build()` -- stremio-tv's
   loader only accepts a module whose `default` export, or one of its named
@@ -187,6 +229,17 @@ on the other end. That means, before calling the scraper done:
   "Check for updates" on the stremio-tv side sees no update at all and
   silently keeps running the OLD copy, even though `dist/` now holds
   something different.
+
+## Keep `SOURCES.md` current
+
+[SOURCES.md](SOURCES.md) tracks every live-TV/live-sport source considered
+for this repository -- implemented, backend-blocked, possible, untriaged or
+rejected, with the reason for whichever status applies. Read it before
+triaging a new source: a candidate may already be marked rejected (with
+why), or noted as probably sharing a backend `ntvst.mts` or `zlive.mts`
+already resolved or hit a wall on. Update it in the same commit whenever a
+source's status changes -- an agent picking this up next has only this
+file and the scrapers themselves to go on, not this session's chat history.
 
 ## Reverse-engineering a source that isn't plain JSON or HTML
 

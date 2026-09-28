@@ -1,0 +1,45 @@
+name: ci
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+
+            - run: npm ci
+
+            - run: npm run build
+
+            # dist/ IS BUILT HERE, NEVER ON A DEVELOPER'S MACHINE.
+            #
+            # stremio-tv's "Import from GitHub" reads dist/*.mjs straight off
+            # this repo's main branch (no clone, no build step on that end),
+            # so it has to be committed -- but from a clean build, by this
+            # job. Pull requests only prove the build works. The commit
+            # carries [skip ci], and a push made with GITHUB_TOKEN does not
+            # retrigger workflows anyway, so there is no loop.
+            - name: Commit the fresh dist/
+              if: github.event_name == 'push'
+              run: |
+                  git add -A dist/
+                  if git diff --cached --quiet; then
+                    echo "dist/ already matches a fresh build"
+                    exit 0
+                  fi
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git commit -m "Build dist/ [skip ci]"
+                  git push
