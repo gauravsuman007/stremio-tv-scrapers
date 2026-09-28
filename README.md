@@ -34,11 +34,17 @@ multiplexes three unrelated backends behind one channel list:
   `epicsports-tv.com`, whose `decode.php` takes the channel id from the
   `Referer` header (not a query param) and is genuinely flaky, succeeding
   roughly half the time.
-- `dlhd` (~9%) — not resolved. Domain-locked, and actively
-  anti-tamper-protected: confirmed by running the extracted payload in a
-  sandboxed Node `vm` (stubbed browser globals, no real network), where
-  patching `Function` to trace calls caused the code to detect the
-  instrumentation and sabotage its own execution.
+- `dlhd` (~9%) — not resolved, but for an architectural reason now, not a
+  cracking failure: the iframe chain (`dlhd.st` → `daddyliveplayer.st`, a
+  "DaddyLive"-family player) hands back a bare `.m3u8` URL in the clear, no
+  token or obfuscation on either hop. Every segment it lists, though, is a
+  genuine PNG with the real MPEG-TS payload steganographically hidden in
+  its pixel data, unwrapped client-side before hls.js ever sees it — a
+  plain HLS client (ffmpeg, this relay, anything conforming) just fetches
+  an image. Decoding it is simple (plain JS, no WASM), but there is nowhere
+  to run that decode step once per segment on an ongoing live stream under
+  this scraper's "return a URL" contract — it would need a decoding relay
+  in front of the CDN, which is outside what this repository can provide.
 
 Coverage: `cdnlive` + all of `hesgoales` ≈ **~91% of the channel catalogue**.
 

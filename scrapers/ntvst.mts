@@ -39,15 +39,33 @@
  *     flaky, succeeding roughly half the time even with correct params
  *     (the site's own page just retries on exactly this failure, so
  *     `decodeEpicsports` does too).
- * - `dlhd` channels resolve to an iframe on `dlhd.st`/`dlive.sx`, a
- *   distinct third-party streaming service with an actively anti-tamper-
- *   protected ~90KB obfuscated bundle and a domain lock on its second
- *   player hop (`assetrage.net`). Confirmed unsolved by running the
- *   extracted payload in a sandboxed Node `vm` (stubbed browser globals,
- *   no real network): patching `Function` to trace calls made the code
- *   detect the instrumentation and sabotage its own execution rather than
- *   proceed. Left unresolved here -- channels on this backend are skipped
- *   rather than guessed at.
+ * - `dlhd` channels resolve to an iframe chain: `dlhd.st/stream/stream-
+ *   <id>.php` (a plain domain alias of `dlive.sx`, same HTML) embeds
+ *   `daddyliveplayer.st/premiumtv/daddy.php?id=<id>` -- a "DaddyLive"-family
+ *   player, re-verified 2026-09-28 (re-checked after an earlier pass found
+ *   this hop obfuscated and domain-locked to `assetrage.net`; the site has
+ *   since swapped in a different, unobfuscated player at the same iframe
+ *   slot). That page hands back a bare `const SRC = "https://edge.<random>
+ *   .sbs/premium<id>/index.m3u8"` in the clear -- no token needed on either
+ *   hop, no `Referer` required even. **Still not resolved here, for a
+ *   different reason than before:** every segment listed in that `.m3u8` is
+ *   a genuine, valid PNG (confirmed against real bytes -- PNG magic number,
+ *   not a renamed/mislabeled `.ts` the way ShuttleTV's `.jpg` segments
+ *   are), with the real MPEG-TS payload steganographically hidden in its
+ *   reconstructed RGB pixel data behind a `TIKTIKPX`-tagged, gzip-compressed
+ *   blob (see `daddyliveplayer.st`'s own `pngRGB`/`unwrap`/`LiveLoader`
+ *   functions, which every fragment passes through before hls.js ever sees
+ *   it). A plain HLS client -- ffmpeg, the relay, any conforming player --
+ *   fetches a real image and finds no TS sync byte at all. Unwrapping it is
+ *   a straightforward port of that site's own plain-JS algorithm (no WASM,
+ *   no anti-tamper trap this time), but there is nowhere to run it: this
+ *   scraper's contract is "hand back a URL, referrer and headers", not an
+ *   ongoing per-segment transform, and a live channel's segments can't be
+ *   pre-decoded once at `build()` time the way a VOD file could be. This
+ *   backend needs a decoding relay in front of the CDN (fetch each
+ *   `.ts.png`, unwrap, re-serve as real `video/MP2T`) -- a host-side
+ *   capability this repository has no way to provide, not a research gap.
+ *   Channels on this backend are skipped rather than handed back broken.
  *
  * `buildEventsRail()` is a second, unrelated bulk-export for ntv.st's
  * *live events* (single sporting fixtures, e.g. "Liverpool FC v.
