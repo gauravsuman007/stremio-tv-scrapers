@@ -493,26 +493,26 @@ async function buildEventsRail(server = DEFAULT_MATCH_SERVER) {
             },
         });
     }
-    const idsByCategory = new Map();
-    for (const { category, channel } of eventChannels) {
-        const list = idsByCategory.get(category) || [];
-        list.push(channel.id);
-        idsByCategory.set(category, list);
-    }
-    const rails = [];
-    for (const category of data.categories || []) {
-        const channelIds = idsByCategory.get(category);
-        if (!channelIds || channelIds.length === 0)
-            continue;
-        rails.push({
-            // Rail ids only need to be unique within this scraper; the
-            // category name itself, slugified, is stable across rebuilds.
-            id: `events-${category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`.slice(0, 40),
-            heading: category,
-            channelIds,
-        });
-    }
-    return { channels: eventChannels.map((e) => e.channel), rails };
+    /*
+        ONE RAIL, NOT ONE PER CATEGORY -- and its heading is "Live Events"
+        on purpose, not this scraper's own name or a category name. The
+        host merges any two scrapers' rails whose headings match (see
+        `ScrapedRail.heading` in the template), so a second live-events
+        scraper that also calls its rail "Live Events" lands its fixtures
+        in the SAME rail as this one's, each event deduplicated by name
+        the same way an ordinary channel is -- a fixture both scrapers
+        carry becomes one card with two sources, not two cards. Splitting
+        by category here, as this used to, would give every category its
+        own per-scraper rail instead and defeat that merge entirely; a
+        viewer who wants to browse by sport still has `categories` on each
+        event channel for that.
+    */
+    if (!eventChannels.length)
+        return { channels: [], rails: [] };
+    return {
+        channels: eventChannels.map((e) => e.channel),
+        rails: [{ id: "live-events", heading: "Live Events", channelIds: eventChannels.map((e) => e.channel.id) }]
+    };
 }
 // --- entry point -----------------------------------------------------------
 /**
@@ -600,7 +600,7 @@ async function build() {
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.2.0",
+    version: "1.3.0",
     configSchema,
     tasks,
     build
