@@ -560,9 +560,55 @@ const configSchema = [
     populating either half itself, on first use, if a task has not run yet
     (e.g. right after this scraper is first loaded, before the host's
     scheduler's first tick).
+
+    SINGLE-FLIGHT, BECAUSE "ON FIRST USE" USED TO MEAN TWICE AT ONCE. The
+    host calls `build()` on its own (warming its index at boot, then again
+    every INDEX_TTL) independently of when its scheduler ticks this
+    scraper's own "channels"/"events" tasks -- nothing serializes the two.
+    With a plain `if (!cache) cache = await fetch()`, a `build()` landing
+    while the matching task was already mid-fetch (both still see the cache
+    as empty) started a SECOND full paginated crawl against ntv.st
+    alongside the first, which is exactly what trips its rate limiter even
+    through `pagePacingMs`'s pacing and `RATE_LIMIT_RETRIES`' backoff --
+    each was measured against ONE crawl at a time, not two racing each
+    other. `ensureChannels`/`ensureEvents` below hand every caller that
+    finds the cache empty the SAME in-flight promise instead of starting
+    their own, so only one crawl of each kind is ever in the air.
 */
 let channelsCache = null;
+let channelsInFlight = null;
+function ensureChannels(pacingMs) {
+    if (channelsCache)
+        return Promise.resolve(channelsCache);
+    if (!channelsInFlight) {
+        channelsInFlight = buildChannels(pacingMs)
+            .then((result) => {
+            channelsCache = result;
+            return result;
+        })
+            .finally(() => {
+            channelsInFlight = null;
+        });
+    }
+    return channelsInFlight;
+}
 let eventsCache = null;
+let eventsInFlight = null;
+function ensureEvents() {
+    if (eventsCache)
+        return Promise.resolve(eventsCache);
+    if (!eventsInFlight) {
+        eventsInFlight = buildEventsRail()
+            .then((result) => {
+            eventsCache = result;
+            return result;
+        })
+            .finally(() => {
+            eventsInFlight = null;
+        });
+    }
+    return eventsInFlight;
+}
 const tasks = [
     {
         id: "channels",
@@ -570,7 +616,14 @@ const tasks = [
         intervalConfigKey: "channelsIntervalMinutes",
         async run(ctx) {
             const pacingMs = Number(ctx.config.pagePacingMs ?? DEFAULT_CHANNEL_PAGE_PACING_MS);
-            channelsCache = await buildChannels(pacingMs);
+            // A task firing on its own schedule means the interval elapsed,
+            // not that the cache is stale in some way `ensureChannels` can
+            // see -- clearing it first is what makes this a genuine
+            // refresh rather than a no-op read of the old value. If a
+            // `build()`-triggered crawl is already in flight, this still
+            // joins it rather than starting a second one.
+            channelsCache = null;
+            channelsCache = await ensureChannels(pacingMs);
         }
     },
     {
@@ -578,29 +631,28 @@ const tasks = [
         label: "Refresh live events",
         intervalConfigKey: "eventsIntervalMinutes",
         async run() {
-            eventsCache = await buildEventsRail();
+            eventsCache = null;
+            eventsCache = await ensureEvents();
         }
     }
 ];
 async function build() {
-    // Sequential, not Promise.all, when both are missing: both hit ntv.st's
-    // own host, and running them concurrently doubles the request pressure
-    // that trips its rate limiter (see pagePacingMs above) for no real time
-    // saved -- buildEventsRail's own request volume is small next to
-    // buildChannels'.
-    if (!channelsCache)
-        channelsCache = await buildChannels(DEFAULT_CHANNEL_PAGE_PACING_MS);
-    if (!eventsCache)
-        eventsCache = await buildEventsRail();
+    // Sequential, not concurrent, when both are missing: both hit ntv.st's
+    // own host, and running them at the same time doubles the request
+    // pressure that trips its rate limiter (see pagePacingMs above) for no
+    // real time saved -- buildEventsRail's own request volume is small next
+    // to buildChannels'.
+    const channels = await ensureChannels(DEFAULT_CHANNEL_PAGE_PACING_MS);
+    const events = await ensureEvents();
     return {
-        channels: [...channelsCache, ...eventsCache.channels],
-        rails: eventsCache.rails
+        channels: [...channels, ...events.channels],
+        rails: events.rails
     };
 }
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.3.0",
+    version: "1.4.0",
     configSchema,
     tasks,
     build
