@@ -84,6 +84,20 @@ imported into stremio-tv (twice daily and hourly by default), each on its
 own user-settable interval -- see "Config and tasks are optional" in
 AGENTS.md for how that's declared.
 
+## [`scrapers/zlive.mts`](./scrapers/zlive.mts) — zlive.st
+
+~200 24/7 channels. Its catalogue (`GET iptv.zlive.st/channels.json`) is
+plain, unauthenticated JSON, but turning a channel's opaque `sources[].key`
+into a real stream URL (`POST iptv.zlive.st/resolve`) is gated behind a
+genuine AES-GCM crypto envelope, not just obfuscation — cracked by running
+the site's own minified bundle in a Node `vm` sandbox with browser globals
+stubbed and `crypto.subtle` instrumented to log its real inputs, the same
+"run it, don't hand-decode it" approach as AGENTS.md's WASM section, applied
+to obfuscated JS instead. Every resolved URL needs `Referer: https://zlive.st/`
+plus a browser-like `User-Agent`; see the module docstring for the full
+algorithm and for why its `/streams` endpoint (same crypto, a live-sporting-
+events feed) is deliberately not scraped here.
+
 ## [`archive/iptv-org.mts`](./archive/iptv-org.mts) — iptv-org (archived)
 
 No longer live here. This scraper now lives in the
