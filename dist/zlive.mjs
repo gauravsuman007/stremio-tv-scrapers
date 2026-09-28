@@ -44,11 +44,22 @@
  *
  * The site also exposes a `POST /streams` endpoint using the exact same
  * crypto envelope (body `{ t: <unix seconds> }` only, no channel key) --
- * that one is zlive's live-SPORTING-EVENTS feed, an entirely separate
- * catalogue from the 24/7 channels above. Not scraped here: it is a much
- * smaller, mostly-fixture-based feed better suited to its own scraper if
- * ever wanted, and mixing it into this one would blur "channel" vs
- * "one-off event" for no benefit.
+ * zlive's live-SPORTING-EVENTS feed, a separate catalogue from the 24/7
+ * channels above, merged into the shared "Live Events" rail (see
+ * `buildEventsRail` below; matches ntvst.mts's own rail of the same name).
+ * Confirmed genuine (not zlive's catch-all decoy -- any unrecognised GET
+ * path 302s to a fixed dummy `.m3u8`, `POST /streams` instead answers
+ * `200 []` with real CORS headers scoped to `https://zlive.st`) but every
+ * request made against it during development returned an empty array --
+ * apparently no sporting event was live at the time -- so each entry's own
+ * field names are inferred from the channel feed's conventions (the only
+ * ground truth available on this site) rather than confirmed against a
+ * real populated response. `parseEvent` below reads every plausible alias
+ * for each field so a shape that turns out slightly different still
+ * degrades to a blander card instead of dropping the event, and `sources`
+ * is resolved through the exact same `/resolve` call channels use, since
+ * both hang off the same backend and neither the docstring nor the bundle
+ * gave any sign events resolve differently.
  *
  * A `key` that already looks like `http(s)://...` is used as-is (the
  * site's own code checks this before ever calling `/resolve` -- some
@@ -178,7 +189,7 @@ function categoriesFor(sport) {
         return [];
     return [sport.toLowerCase()];
 }
-async function build() {
+async function fetchChannels() {
     const rawChannels = await withTimeout((signal) => fetchChannelList(signal));
     const resolved = await mapWithConcurrency(rawChannels, 8, async (entry) => {
         const source = entry.sources[0];
@@ -211,13 +222,93 @@ async function build() {
         };
         return channel;
     });
+    return resolved.filter((channel) => channel !== null);
+}
+function teamName(side) {
+    if (!side)
+        return "";
+    return typeof side === "string" ? side : side.name || "";
+}
+function eventTitle(entry) {
+    if (entry.title || entry.name || entry.match)
+        return entry.title || entry.name || entry.match || "";
+    const home = entry.home || entry.homeTeam || teamName(entry.teams?.home);
+    const away = entry.away || entry.awayTeam || teamName(entry.teams?.away);
+    if (home && away)
+        return `${home} vs ${away}`;
+    return "Live event";
+}
+async function fetchLiveEvents(signal) {
+    const envelope = await encryptEnvelope({ t: Math.floor(Date.now() / 1000) });
+    const response = await fetch(`${BASE}/streams`, {
+        method: "POST",
+        signal,
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, Referer: REFERRER },
+        body: JSON.stringify(envelope)
+    });
+    if (!response.ok)
+        throw new Error(`/streams -> ${response.status}`);
+    const body = (await response.json());
+    return Array.isArray(body) ? body : [];
+}
+async function buildEventsRail() {
+    const events = await withTimeout((signal) => fetchLiveEvents(signal));
+    if (!events.length)
+        return { channels: [], rails: [] };
+    const resolved = await mapWithConcurrency(events, 8, async (entry) => {
+        const source = entry.sources?.[0];
+        if (!source)
+            return null;
+        const url = await withTimeout((signal) => resolveSourceKey(source.key, signal), 15_000).catch(() => null);
+        if (!url)
+            return null;
+        const category = entry.category || entry.sport || entry.league || "uncategorized";
+        const rawId = entry.id ?? entry.key ?? entry.slug ?? eventTitle(entry);
+        const channel = {
+            id: idFor(`event:${rawId}`),
+            name: eventTitle(entry),
+            country: "",
+            countryName: "",
+            countryFlag: "",
+            categories: [category],
+            languages: [],
+            logo: "",
+            website: "",
+            network: "",
+            streams: [
+                {
+                    url,
+                    quality: entry.quality || "",
+                    labels: entry.tagline ? [entry.tagline] : ["Live event"],
+                    referrer: REFERRER,
+                    userAgent: USER_AGENT
+                }
+            ]
+        };
+        return channel;
+    });
     const channels = resolved.filter((channel) => channel !== null);
-    return { channels };
+    if (!channels.length)
+        return { channels: [], rails: [] };
+    // Same rail name ntvst.mts uses -- the host merges any two scrapers'
+    // rails whose headings match, so this lands in the same "Live Events"
+    // rail rather than a separate one.
+    return { channels, rails: [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id) }] };
+}
+async function build() {
+    const [channels, events] = await Promise.all([
+        fetchChannels(),
+        buildEventsRail().catch((cause) => {
+            console.error("zlive: live-events rail failed", cause);
+            return { channels: [], rails: [] };
+        })
+    ]);
+    return { channels: [...channels, ...events.channels], rails: events.rails };
 }
 export const zliveScraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.0.0",
+    version: "1.1.0",
     build
 };
 // -------------------------------------------------------------------------
