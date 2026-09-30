@@ -17,7 +17,8 @@ Statuses:
   cracked, a result not yet reproduced reliably -- before it's ready to
   build. See each row's note for exactly what's missing.
 - **untriaged** -- listed on fmhy.net/video's Live TV / Live Sports sections
-  as of 2026-09-28, not yet examined here. Most of these are themselves
+  as of 2026-09-28, not yet examined far enough to decide (the note says how
+  far it got). Most of these are themselves
   front-ends over a handful of shared backends (dlhd/DaddyLive-family,
   hesgoal-family, streameast-style aggregators) already partly covered by
   `ntvst.mts` or ruled out by `zlive.mts`'s research -- check whether a new
@@ -32,15 +33,36 @@ Source: the "Live TV" and "Live Sports" sections of <https://fmhy.net/video>
 client apps, not live sources this repository's `Scraper.build()` contract
 covers.
 
-Totals: implemented 2 (one with a blocked backend), possible 0, untriaged
-~70, rejected 1.
+Totals: implemented 12 (one with a blocked backend), possible 6, untriaged
+~30 (mostly sport-event sites), rejected 35.
 
-## Implemented (2)
+Method note for whoever continues: the 2026-09-30 pass probed each site in
+headless Chromium with request logging (research only -- see AGENTS.md),
+then followed whatever JSON API or embed the page used. Recurring families
+worth recognising on sight: iptv-org frontends (ids like `CNN.us`,
+`jmp2.uk` links -- nothing new), the dlhd/DaddyLive family
+(backend-blocked), TimStreams (IP-locked), the Streamed/PPV `bundle-jw.js`
+embed family (obfuscated + fingerprinted CDN), and ntv.st reskins
+(`livelive24.com`). Note that Node's `fetch` ignores `HTTPS_PROXY` unless
+`NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
+from a scraper run may be the proxy, not the site.
+
+## Implemented (12)
 
 | Site | Note |
 |---|---|
 | [ntv.st](https://ntv.st/) (+ mirrors `ntvs.cx`, `ntvx.link`) | `scrapers/ntvst.mts`. ~10.4k channels across three unrelated backends: `cdnlive` (~4%, per-request randomised-variable JS assembly) and `hesgoales` (~87%, itself `hesgoal.team`→`wideiptv.top` plain JS literal, plus `epicsports-tv.com`'s `decode.php`, ~50% flaky) are both implemented (~91% of the catalogue). The third, `dlhd` (~9%), is **backend-blocked** -- see below. Also builds a separate live-events rail from ntv.st's own sporting-events feed via its `falcon` mirror. |
 | [zlive.st](https://zlive.st/) | `scrapers/zlive.mts`. ~201 24/7 channels, plus its own live sporting-events feed merged into the shared "Live Events" rail. Catalogue is plain JSON; resolving a channel needs a real AES-GCM-encrypted request, cracked by running the site's own bundle in a Node `vm` sandbox (see AGENTS.md's reverse-engineering section) -- not just obfuscation, an actual crypto scheme. Verified end-to-end: all 201 channels currently resolve to a playable `.m3u8`/proxy URL. The events feed (`POST /streams`, same crypto) was empty at implementation time, so its per-event field names are inferred, not confirmed against a real populated response -- see the scraper's own docstring. |
+| [Pluto TV](https://pluto.tv/live-tv) | `scrapers/pluto.mts`. ~430 channels (US line-up; whichever region the server is in). Anonymous `boot.pluto.tv/v4/start` gives a 24h JWT; stream URLs carry it. The JWT-less legacy stitcher still answers but serves only a "takedown slate" -- verified, don't regress to it. |
+| [vavoo.to](https://vavoo.to/) (+ [kool.to](https://kool.ws/), [huhu.to](https://huhu.to/), [oha.to](https://oha.to/)) | `scrapers/vavoo.mts`. ~7.5k channels / ~10k streams across 17 groups (Europe, Turkey, Arabia...). All four sites are one MediaHubMX addon (vavoo/kool: `mediahubmx-*`, huhu/oha: `mediaurl-*`), identical ids and stream servers. Unsigned `catalog` + `resolve` POSTs; resolved URLs are plain-HTTP `http://<ip>:8008/sunshine/<token>/...m3u8`, still playing after 45+ minutes (true lifetime unknown). ~2 min per build. |
+| [Famelack](https://famelack.com/) | `scrapers/famelack.mts`. ~6.1k channels from its public GitHub dataset (`famelack/famelack-data`); overlaps iptv-org heavily, merges centrally. YouTube-only entries skipped. |
+| [TVNow](https://tvnow.st/) | `scrapers/tvnow.mts`. ~175 US channels; `/api/channels` gives direct `playback` m3u8s. Playlist and segments need `Referer: https://tvnow.st/`. |
+| [TV.Jest](https://tv.jest.one/) + [WorldNews24](https://worldnews24.tv/) | `scrapers/jestone.mts`. Same site, same list (`tvdata.jest.one`). ~11 direct broadcaster news streams (YouTube entries skipped). |
+| [Xumo Play](https://play.xumo.com/networks) | `scrapers/xumo.mts`. ~450 US channels via `valencia-app-mds.xumo.com` (`broadcast.json` `ssaiStreamUrl`, or the live asset's provider source). US-only -- works from a US server (this session's egress was US). |
+| [SHOWROOM](https://showroom-live.com/) | `scrapers/showroom.mts`. Japanese idol/talent rooms live right now (~50) from the public `api/live/onlives`; HLS plays with no headers. A 30-minute task refreshes the list since a room's URL dies when it goes offline. |
+| [CXtv](https://www.cxtvlive.com/) | `scrapers/cxtv.mts`. ~1.8k channels (heavy on Brazilian/LatAm locals); `sitemap.xml` + each page's `data-stream-url`. ~2/3 of a 30-channel sample weren't in iptv-org. ~4 min per build. |
+| [vipotv](https://vipotv.com/) | `scrapers/vipotv.mts`. WordPress directory; REST API lists posts/country categories, each page's `livetv.work/fireplayer` iframe hash resolves via `?do=getVideo` to a plain m3u8. ~1.2k channels; ~60% of a 25-channel sample weren't in iptv-org. Slow: pages take 5-11s each, so a build is ~16 min. |
+| [Futbol-X](https://www.futbol-x.xyz/) | `scrapers/futbolx.mts`. Sport events from `/api/<category>.json` with direct m3u8s (`Referer` required); hourly task, shared "Live Events" rail. Only 2 upcoming events at implementation time. |
 
 ### Backend-blocked (1, within an implemented scraper)
 
@@ -48,110 +70,92 @@ Totals: implemented 2 (one with a blocked backend), possible 0, untriaged
 |---|---|---|
 | `dlhd` (ntv.st, ~9% of its catalogue) | `ntvst.mts` | Resolves cleanly over plain HTTP (`dlhd.st`→`daddyliveplayer.st`, no token, no obfuscation) to a bare `.m3u8` URL -- but every segment it lists is a genuine PNG with the real MPEG-TS payload steganographically hidden in pixel data, unwrapped client-side before hls.js ever sees it. That's a per-segment, ongoing decode requirement no `ScrapedStream` (a static URL + two headers) can carry -- it would need a decoding relay in front of the CDN, a host-level capability, not a research gap. See the scraper's own docstring for the full history (this was previously mis-diagnosed as an anti-tamper/domain-lock problem; re-verified 2026-09-28 and correctly re-classified). |
 
-## Untriaged (~70)
+## Possible (6)
 
-Grouped roughly the way fmhy itself groups them. A `→` note means this
-session's zlive.st/ntv.st research already suggests (but hasn't confirmed)
-what backend a site probably shares.
+| Site | What's missing |
+|---|---|
+| [Pitsport](https://pitsport.st/) | Clean JSON (`/api/v1/live-now`, `/api/v1/programs/<id>/play`) -> `embdlol.st/embed/<uuid>` -> `POST api.embdlol.st/watch {watchId}` answers a plain `prod-*.tonzoidio.st/out/v1/channel(<code>)/index.m3u8` plus an `hmk-token`. That URL 403s to curl with Referer/Origin and with `hmk-token` as a header, and headless Chromium never requested it within 12s -- the final gate is unidentified (a worker? a header name other than `hmk-token`?). |
+| [RoxieStreams](https://roxiestreams.su/) | Static URL scheme found in the page source: `https://<subdomain, e.g. tedesco>.<random line of /domainsz77.txt>/<channel>.m3u8`. Every stream host Cloudflare-blocked this sandbox ("Attention Required", even in Chromium), so playback couldn't be confirmed -- retest from a different network. |
+| [xyzstreams](https://xyzstreams.st/) | 24/7 channels play from a fully static scheme in `/247.html?<n>`: `https://xyzstreams.blog/3/<n>.m3u8` or `https://fishing342.b-cdn.net/3/<n>.m3u8`, with the channel list inline in the homepage JS (`{ id, displayName, embedUrl: '/247.html?<n>', logo }`). Both hosts answered 403/502 from this sandbox (with and without Referer), and headless Chromium never requested either -- retest from another network. |
+| [AwardStreams](https://awardstreams.pages.dev/) | One hard-coded restream (`streamthe.awardshere.link/out/v2/<id>/index.m3u8`, in `/players/clappr`) that only answers during award shows (404 otherwise). Would need a short-interval task emitting one channel while it's up. Low value. |
+| [NontonGP](https://esp32.nontonx.com/) | MotoGP only. `/mgpplayer2` hard-codes a pile of m3u8s, most stale; the one currently playing (`master3.s2stream.top/hls/stream.m3u8`) needs `Referer: https://esp32.nontonx.com/`. Needs a rule for picking the live URL out of the page. Low value. |
+| [F1 Live](https://flive.dpdns.org/) | Plays via `ddelta.flive.dpdns.org/embed/racing/<ch>`, which this sandbox's egress could not reach (tunnel failed). Untested beyond that. |
 
-### Aggregators covering many channels/events at once (highest value if solved)
+## Untriaged (~30)
+
+Mostly live-sport event sites. Each needs its own event -> embed -> stream
+trace; the 2026-09-30 headless pass got as far as the note says.
 
 | Site | Note |
 |---|---|
-| [TVCL](https://www.tvchannellists.com/) | Channel INDEX/directory, not itself a stream host -- check whether it's worth scraping at all vs. just a discovery page for other sources below. |
-| [StreamSports99](https://streamsports99.ru/) (+ mirrors) | |
-| [Famelack](https://famelack.com/) | |
-| [EasyWebTV](https://zhangboheng.github.io/Easy-Web-TV-M3u8/routes/tv.html) | A static GitHub Pages M3U route list -- likely just re-hosts other sources' URLs; check for a raw `.m3u8`/JSON list before building a live resolver. |
-| [IPTV Web](https://iptv-web.app/) | |
-| [SportsBite TV](https://sportsbite.org/channels) | |
-| [TitanTV](https://titantv.com/) | US/Canada TV listings site -- may be a schedule/EPG source only, not a stream host. |
-| [kool.to](https://kool.ws/) | |
-| [huhu.to](https://huhu.to/) | |
-| [vavoo.to](https://vavoo.to/) | Widely used by third-party Kodi/IPTV addons via its own signed API (`vavoo.to/live/index/{region}` style) -- likely worth checking that API directly rather than the web page. |
-| [oha.to](https://oha.to/) | |
-| [1TUbe](https://www.1tube.org/live-tv) | |
-| [Cinevid](https://cinevid.st/iptv/) | Also has a live-sports schedule page (`/iptv/schedule`); same site as the VOD Cinevid this repo's sibling web-scraper project may already know. |
-| [TVNow](https://tvnow.st/) | |
-| [Xumo Play](https://play.xumo.com/networks) | Real public API (`valencia-app-mds.xumo.com`), but geo-blocked outside the US -- 302'd to `/geo-block` when tried from this session's network. Needs testing from a US vantage point before ruling in or out. |
-| [DamiTV](https://damitv.st/livetv) | 403 on a plain `curl` (Cloudflare) as of 2026-09-28 -- see AGENTS.md's FlareSolverr section before assuming it's a dead end. |
-| [90minutes](https://www.90minutes.pro/) | |
-| [Pluto](https://pluto.tv/live-tv) | Real, well-documented public API, but needs a session bootstrap call first (`401 BearerTokenRequired` on a bare channel-list request) -- a `possible` lead, not yet pursued past that. |
-| [FreeTVGarden](https://freetvgarden.com/) | |
-| [Watchott Live](https://iptv.watchott.org/) | |
-| [xyzstreams](https://xyzstreams.st/) | |
-| [TV Explorer](https://tvexplorer.live/) | |
-| [TV247US](https://tvnow247.top/) | |
-| [CXtv](https://www.cxtvlive.com/) | |
-| [WatchTVs](https://watchtvs.live/) | |
-| [Rive IPTV](https://www.rivestream.app/iptv) | Same site as the VOD Rivestream the sibling web-scraper repo already covers -- check whether its IPTV section shares that same scraper API before treating it as a separate source. |
-| [Zerostream](https://zerostream.alwaysdata.net/) | |
-| [Vegeta TV](http://vegetatv.duckdns.org/) | Plain HTTP (`http://`, no TLS) home-hosted (`duckdns.org`) service -- likely small/personal, low priority. |
-| [Global Free TV](https://www.globalfreetv.com/) | |
-| [vipotv](https://vipotv.com/) | |
-| [SquidTV](https://www.squidtv.net/) | |
-| [TVAtlas](https://tvatlas.app/) | |
-| [AwardStreams](https://awardstreams.pages.dev/) | |
-| [Puffer](https://puffer.stanford.edu/) | A Stanford research project (adaptive-bitrate streaming experiment), not a general aggregator -- likely out of scope entirely. |
-| [TV.Jest](https://tv.jest.one/) | |
-| [WorldNews24](https://worldnews24.tv/) | |
-| [SHOWROOM](https://showroom-live.com/) | Japanese idol/talent livestreaming platform -- different content category than the rest of this list; confirm it's actually free-to-scrape before spending time on it. |
-| [Koryo TV](https://koryo.tv/) | |
-| [KCNA](https://kcnawatch.us/korea-central-tv-livestream) | North Korean state TV livestream -- niche but a single fixed channel, likely a quick standalone scraper if wanted. |
+| [StreamSports99](https://streamsports99.ru/) (+ mirrors) | Not probed past the homepage (client-rendered). |
+| [SportsindX](https://sportsindx.st/) | Unreachable from this sandbox (connection failed). |
+| [WatchSports](https://watchsports.st/) (+ `.su`) | Unreachable from this sandbox (connection failed). |
+| [LiveTV](https://livetv.sx/enx/) | Unreachable to curl; blank page in headless Chromium. |
+| [StreamCorner](https://streamcorner.st/) (+ mirrors) | Homepage is a blob-script loader that rendered `about:blank` headless. |
+| [StreamEast](https://streameast.ga/) (+ mirrors) | `v2.streameast.ga`, behind an `auth.streamea.st` SSO hand-off and a "buy premium" wall; free streams not located. |
+| [StreamFree](https://streamfree.top/) | Has `/player/<sport>/<slug>` pages and `strmfree.link/api/domains`; embed not traced. |
+| [Watch Footy](https://watchfooty.st/) | Next.js app, `/en/match/<id>` pages; embed not traced. |
+| [Sportsurge](https://v2.sportsurge.net/) | Cloudflare Turnstile ("Just a moment...") even in Chromium. |
+| [TotalSportek](https://total-sportekk.st/) | No stream links reached from the homepage. |
+| [Tap4Sport](https://tap4sport.st/) (+ mirrors) | Cloudflare Turnstile even in Chromium. |
+| [CMVTV](https://cmvlinks.lovable.app/) | Lovable SPA using SofaScore for fixtures; streams not traced. |
+| [Fantastic Soda](https://fantasticsoda.com/) | Uses a Streamed-style `/api/matches/all` (empty to curl) -- probably another Streamed mirror, unconfirmed. |
+| [FSL](https://freestreams-live1h.pk/) | Blob-script loader; no player reached. |
+| [Streami](https://streamic.st/) | Loads `/api/J.php`; not traced. |
+| [FalconStreams](https://falconstreams.app/) | Next.js; no player reached. |
+| [CricHD](https://crichd.at/) | Event pages load only ad scripts headless; player not reached. |
+| [TheTVApp](https://thetvapp.plus/) | `/watch/<league>-streams` listing pages; per-game player not traced. zerostream links `tvpass.org/live/<Channel>/hd`, probably the same family. |
+| [MainPortal66](https://mainportal66.com/) | Links portal; not traced. |
+| [FCTV33](https://www.fctv33hd.co/) | Redirects to `fctv33hd.uno`; calls `apis-data10.tcllu137fien.ru/api/common/params`; not traced. |
+| [VIP Box Sports](https://vipleague.me/home) (+ mirrors) | `/watch-now`; not traced. |
+| [FawaNews](http://www.fawanews.sc/) | 403 from this sandbox. |
+| [Baked.live](https://baked.live/) | No player reached. |
+| [NBAMonster](https://nbamonster.com/) | Redirects to `/vp33/`; not traced. |
+| [OnHockey](https://onhockey.tv/) | Homepage shows standings widgets; per-game embeds not traced. |
+| [OvertakeFans](https://overtakefans.com/) | `/f1-live-stream/` has no player in its static HTML; needs a live session to trace. |
+| [Tiz-Cycling](https://tiz-cycling.tv/) | Mostly replays (out of scope); live pages not traced. |
+| [Rugby24](https://rugby24.net/) | Cloudflare Turnstile even in Chromium. |
+| [Strims24](https://strims24.pl/) / [Strumyk](https://strumyk.pk/) | Same backend (`/api/v1/<sport>/<date>` -> Flashscore match ids). Match pages carried no stream links when checked -- likely link-aggregators that only fill in near kick-off. |
+| [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit -- per-post link scraping, a different shape of scraper. |
+| [Sportarr](https://sportarr.net/) | Self-described *arr-style automation tool, likely a client rather than a source. |
 
-### Sport-specific aggregators and mirrors
-
-| Site | Note |
-|---|---|
-| [TimStreams](https://timst.cfd/) | |
-| [Streamed](https://streamed.pk/) (+ mirrors `streamed.st`, `strmd.link`) | |
-| [StreamCorner](https://streamcorner.st/) (+ mirrors) | |
-| [PPV.ST](https://ppv.st/) (+ many TLD mirrors) | |
-| [SportsindX](https://sportsindx.st/) | |
-| [WatchSports](https://watchsports.st/) (+ `.su`) | |
-| [Strumyk](https://strumyk.pk/) | |
-| [Strims24](https://strims24.pl/) | |
-| [StreamEast](https://streameast.ga/) (+ many TLD mirrors) | One of the most-mirrored names on the list -- worth checking whether all the TLD variants share one backend before triaging each separately. |
-| [StreamFree](https://streamfree.top/) | |
-| [RoxieStreams](https://roxiestreams.su/) | |
-| [BINTV](https://www.bintv.cc/) (+ `cosectv.com`) | |
-| [Watch Footy](https://watchfooty.st/) | |
-| [LiveTV](https://livetv.sx/enx/) | Long-running, well-known aggregator; likely worth an early look given its longevity. |
-| [DaddyLiveHD](https://daddylive.mov/) (+ `.app`, `.li`) | Almost certainly the same `dlhd`/DaddyLive-family backend `ntvst.mts` already found blocked (PNG-steganography segments) -- confirm before spending research time, this is very likely a duplicate of an already-solved (and already-blocked) backend. |
-| [Reedstreams](https://reedstreams.to/) (+ mirrors; also listed as "Reedsports") | |
-| [Futbol-X](https://www.futbol-x.xyz/) | |
-| [Sportsurge](https://v2.sportsurge.net/) (+ `ww1.sportsurge.st`) | |
-| [Matchora](https://matchora.to/) | |
-| [TotalSportek](https://total-sportekk.st/) | |
-| [Score808](https://score808hd.tv/) | |
-| [Tap4Sport](https://tap4sport.st/) (+ mirrors) | |
-| [CMVTV](https://cmvlinks.lovable.app/) | |
-| [Fantastic Soda](https://fantasticsoda.com/) | |
-| [FSL](https://freestreams-live1h.pk/) | |
-| [Streami](https://streamic.st/) | |
-| [SportOnTV](https://sportontv.click/) | |
-| [FalconStreams](https://falconstreams.app/) | |
-| [VenueVault](https://venuevault.live/) | |
-| [CricHD](https://crichd.at/) | |
-| [TheTVApp](https://thetvapp.plus/) | |
-| [MainPortal66](https://mainportal66.com/) | |
-| [FCTV33](https://www.fctv33hd.co/) | |
-| [VIP Box Sports](https://vipleague.me/home) (+ mirrors) | |
-| [FawaNews](http://www.fawanews.sc/) | Plain HTTP (no TLS). |
-| [Baked.live](https://baked.live/) | |
-| [Guide TV](https://guidetv.live/) | |
-| [NBAMonster](https://nbamonster.com/) | Basketball-specific. |
-| [OnHockey](https://onhockey.tv/) | Hockey-specific. |
-| [Pitsport](https://pitsport.st/) | Motorsport-specific. |
-| [OvertakeFans](https://overtakefans.com/) | Motorsport-specific. |
-| [F1 Live](https://flive.dpdns.org/) | F1-specific. |
-| [NontonGP](https://esp32.nontonx.com/) | MotoGP-specific. |
-| [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit, not a site -- would need per-post link scraping, a very different shape of scraper than everything else here. |
-| [Tiz-Cycling](https://tiz-cycling.tv/) | Cycling-specific. |
-| [Rugby24](https://rugby24.net/) | Rugby-specific. |
-| [Sportarr](https://sportarr.net/) | Describes itself as a *arr-style automation tool (per its GitHub link alongside it), not a stream host directly -- likely a client for other sources rather than a source itself. |
-
-## Rejected (1)
+## Rejected (35)
 
 | Site | Reason |
 |---|---|
 | [Live24](https://livelive24.com/) | Its own "API" link points straight at `livelive24.com/test/ntv/ntv.json` -- a reskin serving ntv.st's own data, not an independent source. `ntvst.mts` already covers the underlying catalogue (and separately uses this same site as its `falcon`-mirror event-resolution backend for `dlhd`-family events, which is unrelated to its 24/7-channel reskin). |
+| [Streamed](https://streamed.pk/) (+ `streamed.st`, `strmd.link`) | Clean public API (`/api/matches/live`, `/api/stream/<source>/<id>`) but every stream is an `embed.st` page whose `lock.wasm` (73 imports: DOM, `navigator`, `fetch`) decodes the `POST /fetch` response into a `lbN.strmd.st/secure/...` playlist -- and that CDN 403s curl even with byte-identical headers sent at the same instant the browser gets 200 (TLS/HTTP2 fingerprinting). Unplayable by a non-browser client even if the WASM were reimplemented. |
+| [Reedstreams](https://reedstreams.to/) (+ mirrors) | `api.reedstreams.link/api/matches/all` re-serves Streamed's own match ids (`ppv-...`) -- a Streamed mirror. |
+| [PPV.ST](https://ppv.st/) (+ mirrors) | `api.ppv.st/api/streams` is clean, but each stream is an `embedindia.st`-style embed loading an obfuscated `bundle-jw.js` (same player family as Streamed); the embed didn't initialise in headless Chromium, and the API's own README says raw m3u8s are never provided. |
+| [90minutes](https://www.90minutes.pro/) | Serves DamiTV's public API (PPV-family data), embed URLs only by design. |
+| [SportOnTV](https://sportontv.click/) | Front-end over `api.ppv.st` (PPV, above). |
+| [SportsBite TV](https://sportsbite.org/channels) | Aggregates PPV's and Streamed's APIs; its own 24/7 embeds bounced headless Chromium back to the homepage. Duplicate of two rejected backends. |
+| [TimStreams](https://timst.cfd/) | `timst.top/api/channels` is clean JSON, but each stream goes `exmxbxe.cfd/<id>` -> 302 `/play/<ts>.<sig>.<slug>`, an IP-locked page ("Access Denied (IP Lock)" from a different egress IP) whose obfuscated inline script (run in `node:vm` with jwplayer stubbed) yields `.../main/secure/<hash>/<expiry>/<slug>.m3u8` (zlive's backend URL family) expiring ~2.5h out; replay 404'd. Headless Chromium gets bounced to a decoy. IP-bound + shorter than a rebuild = unusable. |
+| [DamiTV](https://damitv.st/livetv) | `/data/ts-channels.json`: 165 TimStreams channels (via `messi.damitv.st/papi/ts2/...`, all 502 when tested) + 38 dlhd. Both backends rejected/blocked. |
+| [BINTV](https://www.bintv.cc/) (+ `cosectv.com`) | Reads `timst.top` (TimStreams) plus a Lovable "event-decoder" API over Streamed images -- front-end over rejected backends. |
+| [Matchora](https://matchora.to/) | Clean `/api/v1/live` with per-channel `/api/play/<id>`, but the resulting `edge.matchora.pro/hls/<id>/index.m3u8?t=` token is `base64(id|expiry|sig)` with a 10-minute expiry; even the browser's own refetch 403'd. |
+| [DaddyLiveHD](https://daddylive.mov/) (+ `.app`, `.li`) | Brands itself "Daddylive"; the dlhd/DaddyLive backend `ntvst.mts` already found blocked (PNG-steganography segments). Not re-traced. |
+| [Watchott Live](https://iptv.watchott.org/) | `/api/dlhd-channels` -> `dlive.sx` players: dlhd family (backend-blocked). |
+| [TV247US](https://tvnow247.top/) | Channels resolve via `.../api/resolve-dlstream/<n>` -- dlhd family. |
+| [Guide TV](https://guidetv.live/) | Streams via `livelive24.com` (an ntv.st reskin, see Live24) with short-lived `wsSecret`/`wsABSTime` CDN tokens. |
+| [Cinevid](https://cinevid.st/iptv/) | Aggregator over backends already covered: `tvn` = tvnow.st proxied (same media sequence), `cdn-live` = ntv.st's cdnlive (301/581 channels), `tms` returned `{"streamUrl":null}` for every channel tried, `stream` ECONNREFUSED. |
+| [TVAtlas](https://tvatlas.app/) | Static iptv-org snapshot (`/data/channels/<cc>.json`, iptv-org ids). |
+| [FreeTVGarden](https://freetvgarden.com/) | iptv-org API client. |
+| [WatchTVs](https://watchtvs.live/) | `/tvgarden/` is a FreeTVGarden reskin (iptv-org); the rest is radio/music. |
+| [EasyWebTV](https://zhangboheng.github.io/Easy-Web-TV-M3u8/routes/tv.html) | iptv-org API client. |
+| [TV Explorer](https://tvexplorer.live/) | iptv-org (ids like `BBCEarth.uk`, `jmp2.uk` links). |
+| [IPTV Web](https://iptv-web.app/) | Static site over iptv-org (`/AF/ShamsTV.af/`-style pages). |
+| [Global Free TV](https://www.globalfreetv.com/) | iptv-org (`/channels/MiamiTV.us`-style pages). |
+| [1TUbe](https://www.1tube.org/live-tv) | Loads `iptv-org.github.io/iptv/index.m3u` plus YouTube. |
+| [SquidTV](https://www.squidtv.net/) | Link directory to broadcasters' own websites; no streams of its own. |
+| [TVCL](https://www.tvchannellists.com/) | Cloudflare hard block ("Attention Required") from datacenter IPs even in Chromium -- which is also what a stremio-tv server would get; a channel directory per its own description anyway. |
+| [TitanTV](https://titantv.com/) | US TV listings/EPG app; no streams. |
+| [Puffer](https://puffer.stanford.edu/) | `/player/` requires an account (Stanford research study). |
+| [Vegeta TV](http://vegetatv.duckdns.org/) | Front-end over an Xtream-Codes panel cache behind its own account/auth API -- a login-gated relay of paid-IPTV credentials. |
+| [Koryo TV](https://koryo.tv/) | KCTV via `edge-*.koryo.tv`; `/session/anon` and the playlist 404 outside the page's own session, and the browser's own playlist refresh 401'd within seconds -- per-session cookie gate. |
+| [KCNA](https://kcnawatch.us/korea-central-tv-livestream) | Livestream page 302s to a member sign-up form behind Cloudflare Turnstile. |
+| [Rive IPTV](https://www.rivestream.app/iptv) | Its `/api/backendfetch?requestID=liveSportsLiveTvChannels` returns the app's HTML shell even to the real page in a real browser -- backend broken/moved. |
+| [Zerostream](https://zerostream.alwaysdata.net/) | Mostly anime/VOD. Live part: a 16-entry gist M3U on a server iptv-org already lists, `tvpass.org` links (TheTVApp family) and `slingtv-proxy` iframes. |
+| [Score808](https://score808hd.tv/) | Dead: Cloudflare 522 (origin timeout) on 2026-09-30. |
+| [VenueVault](https://venuevault.live/) | Dead: Cloudflare 526 (invalid origin certificate) on 2026-09-30. |
