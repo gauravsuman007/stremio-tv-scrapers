@@ -71,12 +71,18 @@ function idFor(rawId) {
 }
 async function withTimeout(work, ms = 20_000) {
     const controller = new AbortController();
+    // Deliberately NOT cleared once `work` resolves: `fetch` resolves on
+    // headers, and the caller's body read (`.text()`/`.json()`) still needs
+    // this signal armed, or a server that stalls mid-body hangs forever.
+    // `unref` keeps the pending timer from holding the process open.
     const timer = setTimeout(() => controller.abort(), ms);
+    timer.unref?.();
     try {
         return await work(controller.signal);
     }
-    finally {
+    catch (cause) {
         clearTimeout(timer);
+        throw cause;
     }
 }
 /** Runs `items` through `worker` with at most `limit` in flight at once --
@@ -308,7 +314,7 @@ async function build() {
 export const zliveScraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.1.0",
+    version: "1.1.1",
     build
 };
 // -------------------------------------------------------------------------
