@@ -103,11 +103,20 @@ function idFor(rawId: string): string {
 
 async function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms = 20_000): Promise<T> {
     const controller = new AbortController();
+    // Deliberately NOT cleared once `work` resolves: `fetch()` resolves on
+    // headers, and the body read (`.json()`/`.text()`) that follows is
+    // still tied to this signal -- clearing the timer here would leave a
+    // stalled body able to hang build() forever. Aborting after the body
+    // is already read is a no-op; `unref()` keeps the timer from holding
+    // the process open.
     const timer = setTimeout(() => controller.abort(), ms);
+    timer.unref?.();
+
     try {
         return await work(controller.signal);
-    } finally {
+    } catch (cause) {
         clearTimeout(timer);
+        throw cause;
     }
 }
 
