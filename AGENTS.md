@@ -454,6 +454,22 @@ is worth recognising *before* spending a research session on:
   that resolves cleanly in research returns nothing once actually
   deployed, suspect this before suspecting the algorithm.
 
+### Segment decoders: the one ongoing transform the contract CAN carry
+
+Since stremio-tv plugin API 1.2.0 / Live TV plugin 1.6.0, a stream may name
+a `decoder` from its scraper's own `decoders` map (see the template). The
+plugin relays every request of such a stream -- playlist, variants,
+segments, keys -- and runs the decoder on each segment. This is exactly
+what `dlhd` needed (the bullet above describes the problem as it stood):
+`scrapers/dlhd.mts` is the worked example. Two consequences worth knowing:
+
+- `referrer` and `userAgent` are now sent on every segment too, not only
+  on the playlist -- core never sent them before, so a Referer-locked CDN
+  used to pass the plugin's checks and fail on the television.
+- A decoder is pure computation over bytes, run on the server for every
+  segment of every viewer. It still cannot add a cookie, sign each
+  request, or talk to the network; those remain dead ends here.
+
 ## Updating the template
 
 `template/scraper-template.mts` is a manual copy of

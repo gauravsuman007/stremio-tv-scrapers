@@ -41,17 +41,17 @@ headless Chromium with request logging (research only -- see AGENTS.md),
 then followed whatever JSON API or embed the page used. Recurring families
 worth recognising on sight: iptv-org frontends (ids like `CNN.us`,
 `jmp2.uk` links -- nothing new), the dlhd/DaddyLive family
-(backend-blocked), TimStreams (IP-locked), the Streamed/PPV `bundle-jw.js`
+(now `dlhd.mts`), TimStreams (IP-locked), the Streamed/PPV `bundle-jw.js`
 embed family (obfuscated + fingerprinted CDN), and ntv.st reskins
 (`livelive24.com`). Note that Node's `fetch` ignores `HTTPS_PROXY` unless
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (12)
+## Implemented (13)
 
 | Site | Note |
 |---|---|
-| [ntv.st](https://ntv.st/) (+ mirrors `ntvs.cx`, `ntvx.link`) | `scrapers/ntvst.mts`. ~10.4k channels across three unrelated backends: `cdnlive` (~4%, per-request randomised-variable JS assembly) and `hesgoales` (~87%, itself `hesgoal.team`→`wideiptv.top` plain JS literal, plus `epicsports-tv.com`'s `decode.php`, ~50% flaky) are both implemented (~91% of the catalogue). The third, `dlhd` (~9%), is **backend-blocked** -- see below. Also builds a separate live-events rail from ntv.st's own sporting-events feed via its `falcon` mirror. |
+| [ntv.st](https://ntv.st/) (+ mirrors `ntvs.cx`, `ntvx.link`) | `scrapers/ntvst.mts`. ~10.4k channels across three unrelated backends: `cdnlive` (~4%, per-request randomised-variable JS assembly) and `hesgoales` (~87%, itself `hesgoal.team`→`wideiptv.top` plain JS literal, plus `epicsports-tv.com`'s `decode.php`, ~50% flaky) are both implemented (~91% of the catalogue). The third, `dlhd` (~9%), is still skipped here: those channels come from `dlhd.mts` instead, which covers the whole DaddyLive catalogue. Also builds a separate live-events rail from ntv.st's own sporting-events feed via its `falcon` mirror. |
 | [zlive.st](https://zlive.st/) | `scrapers/zlive.mts`. ~201 24/7 channels, plus its own live sporting-events feed merged into the shared "Live Events" rail. Catalogue is plain JSON; resolving a channel needs a real AES-GCM-encrypted request, cracked by running the site's own bundle in a Node `vm` sandbox (see AGENTS.md's reverse-engineering section) -- not just obfuscation, an actual crypto scheme. Verified end-to-end: all 201 channels currently resolve to a playable `.m3u8`/proxy URL. The events feed (`POST /streams`, same crypto) was empty at implementation time, so its per-event field names are inferred, not confirmed against a real populated response -- see the scraper's own docstring. |
 | [Pluto TV](https://pluto.tv/live-tv) | `scrapers/pluto.mts`. ~430 channels (US line-up; whichever region the server is in). Anonymous `boot.pluto.tv/v4/start` gives a 24h JWT; stream URLs carry it. The JWT-less legacy stitcher still answers but serves only a "takedown slate" -- verified, don't regress to it. |
 | [vavoo.to](https://vavoo.to/) (+ [kool.to](https://kool.ws/), [huhu.to](https://huhu.to/), [oha.to](https://oha.to/)) | `scrapers/vavoo.mts`. ~7.5k channels / ~10k streams across 17 groups (Europe, Turkey, Arabia...). All four sites are one MediaHubMX addon (vavoo/kool: `mediahubmx-*`, huhu/oha: `mediaurl-*`), identical ids and stream servers. Unsigned `catalog` + `resolve` POSTs; resolved URLs are plain-HTTP `http://<ip>:8008/sunshine/<token>/...m3u8`, still playing after 45+ minutes (true lifetime unknown). ~2 min per build. |
@@ -63,12 +63,14 @@ from a scraper run may be the proxy, not the site.
 | [CXtv](https://www.cxtvlive.com/) | `scrapers/cxtv.mts`. ~1.8k channels (heavy on Brazilian/LatAm locals); `sitemap.xml` + each page's `data-stream-url`. ~2/3 of a 30-channel sample weren't in iptv-org. ~4 min per build. |
 | [vipotv](https://vipotv.com/) | `scrapers/vipotv.mts`. WordPress directory; REST API lists posts/country categories, each page's `livetv.work/fireplayer` iframe hash resolves via `?do=getVideo` to a plain m3u8. ~1.2k channels; ~60% of a 25-channel sample weren't in iptv-org. Slow: pages take 5-11s each, so a build is ~16 min. |
 | [Futbol-X](https://www.futbol-x.xyz/) | `scrapers/futbolx.mts`. Sport events from `/api/<category>.json` with direct m3u8s (`Referer` required); hourly task, shared "Live Events" rail. Only 2 upcoming events at implementation time. |
+| [DaddyLive](https://dlhd.st/) (`dlive.sx`; also behind DaddyLiveHD, Watchott Live, TV247US, DamiTV's dlhd half) | `scrapers/dlhd.mts`. ~930 24/7 channels from `/24-7-channels.php` plus today's schedule (~30 events in a window around now) on the shared "Live Events" rail. Every stream is `edge.<host>/premium<id>/index.m3u8` (host learnt from one player page per build). Segments are PNGs with the TS gzipped into the pixels; the scraper ships a `tiktikpx` segment decoder and the Live TV plugin runs it on every segment through its relay. **Needs stremio-tv plugin API 1.2.0 and Live TV plugin 1.6.0**; on anything older these streams are dropped, not offered broken. |
 
-### Backend-blocked (1, within an implemented scraper)
+### Formerly backend-blocked
 
-| Backend | Parent scraper | Note |
-|---|---|---|
-| `dlhd` (ntv.st, ~9% of its catalogue) | `ntvst.mts` | Resolves cleanly over plain HTTP (`dlhd.st`→`daddyliveplayer.st`, no token, no obfuscation) to a bare `.m3u8` URL -- but every segment it lists is a genuine PNG with the real MPEG-TS payload steganographically hidden in pixel data, unwrapped client-side before hls.js ever sees it. That's a per-segment, ongoing decode requirement no `ScrapedStream` (a static URL + two headers) can carry -- it would need a decoding relay in front of the CDN, a host-level capability, not a research gap. See the scraper's own docstring for the full history (this was previously mis-diagnosed as an anti-tamper/domain-lock problem; re-verified 2026-09-28 and correctly re-classified). |
+`dlhd` (PNG-wrapped segments) was listed here until the scraper contract
+gained segment `decoders` (`ScrapedStream.decoder`) and the Live TV plugin
+a relay that runs them -- see `dlhd.mts`. The decoder is a straight port of
+`daddyliveplayer.st`'s own `unwrap()`.
 
 ## Possible (6)
 
@@ -120,7 +122,7 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [r/rugbystreams](https://www.reddit.com/r/rugbystreams/) | A subreddit -- per-post link scraping, a different shape of scraper. |
 | [Sportarr](https://sportarr.net/) | Self-described *arr-style automation tool, likely a client rather than a source. |
 
-## Rejected (35)
+## Rejected (32)
 
 | Site | Reason |
 |---|---|
@@ -132,12 +134,9 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [SportOnTV](https://sportontv.click/) | Front-end over `api.ppv.st` (PPV, above). |
 | [SportsBite TV](https://sportsbite.org/channels) | Aggregates PPV's and Streamed's APIs; its own 24/7 embeds bounced headless Chromium back to the homepage. Duplicate of two rejected backends. |
 | [TimStreams](https://timst.cfd/) | `timst.top/api/channels` is clean JSON, but each stream goes `exmxbxe.cfd/<id>` -> 302 `/play/<ts>.<sig>.<slug>`, an IP-locked page ("Access Denied (IP Lock)" from a different egress IP) whose obfuscated inline script (run in `node:vm` with jwplayer stubbed) yields `.../main/secure/<hash>/<expiry>/<slug>.m3u8` (zlive's backend URL family) expiring ~2.5h out; replay 404'd. Headless Chromium gets bounced to a decoy. IP-bound + shorter than a rebuild = unusable. |
-| [DamiTV](https://damitv.st/livetv) | `/data/ts-channels.json`: 165 TimStreams channels (via `messi.damitv.st/papi/ts2/...`, all 502 when tested) + 38 dlhd. Both backends rejected/blocked. |
+| [DamiTV](https://damitv.st/livetv) | `/data/ts-channels.json`: 165 TimStreams channels (via `messi.damitv.st/papi/ts2/...`, all 502 when tested) + 38 dlhd (covered by `dlhd.mts`). The TimStreams half stays rejected. |
 | [BINTV](https://www.bintv.cc/) (+ `cosectv.com`) | Reads `timst.top` (TimStreams) plus a Lovable "event-decoder" API over Streamed images -- front-end over rejected backends. |
 | [Matchora](https://matchora.to/) | Clean `/api/v1/live` with per-channel `/api/play/<id>`, but the resulting `edge.matchora.pro/hls/<id>/index.m3u8?t=` token is `base64(id|expiry|sig)` with a 10-minute expiry; even the browser's own refetch 403'd. |
-| [DaddyLiveHD](https://daddylive.mov/) (+ `.app`, `.li`) | Brands itself "Daddylive"; the dlhd/DaddyLive backend `ntvst.mts` already found blocked (PNG-steganography segments). Not re-traced. |
-| [Watchott Live](https://iptv.watchott.org/) | `/api/dlhd-channels` -> `dlive.sx` players: dlhd family (backend-blocked). |
-| [TV247US](https://tvnow247.top/) | Channels resolve via `.../api/resolve-dlstream/<n>` -- dlhd family. |
 | [Guide TV](https://guidetv.live/) | Streams via `livelive24.com` (an ntv.st reskin, see Live24) with short-lived `wsSecret`/`wsABSTime` CDN tokens. |
 | [Cinevid](https://cinevid.st/iptv/) | Aggregator over backends already covered: `tvn` = tvnow.st proxied (same media sequence), `cdn-live` = ntv.st's cdnlive (301/581 channels), `tms` returned `{"streamUrl":null}` for every channel tried, `stream` ECONNREFUSED. |
 | [TVAtlas](https://tvatlas.app/) | Static iptv-org snapshot (`/data/channels/<cc>.json`, iptv-org ids). |

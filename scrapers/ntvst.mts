@@ -66,6 +66,10 @@
  *   `.ts.png`, unwrap, re-serve as real `video/MP2T`) -- a host-side
  *   capability this repository has no way to provide, not a research gap.
  *   Channels on this backend are skipped rather than handed back broken.
+ *   (Since 2026-10-01 that relay exists -- the scraper contract's segment
+ *   `decoders`, run by the Live TV plugin -- and `dlhd.mts` uses it for
+ *   the whole DaddyLive catalogue, a superset of these ~200 channels. They
+ *   stay skipped here so the two do not list the same feeds twice.)
  *
  * `buildEventsRail()` is a second, unrelated bulk-export for ntv.st's
  * *live events* (single sporting fixtures, e.g. "Liverpool FC v.

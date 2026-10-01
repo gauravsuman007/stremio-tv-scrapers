@@ -117,11 +117,43 @@ interface ScrapedStream {
     quality: string;
     /** Short warnings such as "Geo-blocked" or "Not 24/7". */
     labels: string[];
-    /** HTTP Referer this stream needs, or "". */
+    /** HTTP Referer this stream needs, or "". Sent on EVERY request the
+     *  stream makes -- playlist, variants, segments, keys -- because the
+     *  Live TV plugin relays all of them (stremio-tv plugin API 1.2.0). */
     referrer: string;
-    /** User-Agent this stream needs, or "". */
+    /** User-Agent this stream needs, or "". Sent the same way. */
     userAgent: string;
+    /**
+     * OPTIONAL. The name of an entry in this scraper's own `decoders`
+     * (see `Scraper.decoders` and `SegmentDecoder` below) that every
+     * SEGMENT of this stream must pass through before a player can read it.
+     * Leave it out for an ordinary stream -- which is nearly all of them.
+     *
+     * For a CDN that disguises its video: dlhd's segments are real PNG
+     * images with the MPEG-TS packed into their pixels (see `dlhd.mts`).
+     * The plugin relays the stream, reads each playlist as it passes so it
+     * knows every segment URL in it, and runs your decoder on each segment
+     * on the way to the player. Playlists themselves are never decoded.
+     *
+     * A NAME, not the function, because your catalogue is stored as JSON
+     * between runs. A name with no matching decoder -- or a stremio-tv too
+     * old to relay segments through the plugin -- drops the stream rather
+     * than handing a player a picture.
+     */
+    decoder?: string;
 }
+
+/**
+ * Turns one segment, exactly as the CDN served it, into what a player
+ * expects -- normally MPEG-TS (188-byte packets, each starting `0x47`).
+ * `url` is the segment's own address. Throw if the bytes are not what you
+ * expected: that one segment then fails, and the player moves on.
+ *
+ * Runs on the stremio-tv server for every segment of every viewer, so keep
+ * it pure computation over the bytes: no network, no state between calls.
+ * `node:zlib` and `node:crypto` cover what this usually takes.
+ */
+type SegmentDecoder = (segment: Uint8Array, url: string) => Uint8Array | Promise<Uint8Array>;
 
 interface ScrapedChannel {
     /** Must start with `live:<your-scraper-id>:` -- see `idFor`. */
@@ -308,6 +340,9 @@ interface Scraper {
     configSchema?: ScraperConfigField[];
     /** OPTIONAL. See `ScraperTask` above. */
     tasks?: ScraperTask[];
+    /** OPTIONAL. Named segment decoders, referenced by
+     *  `ScrapedStream.decoder`. See `SegmentDecoder` above. */
+    decoders?: Record<string, SegmentDecoder>;
     build(): Promise<ScrapedCatalogue>;
 }
 
