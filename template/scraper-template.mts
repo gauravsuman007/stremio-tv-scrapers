@@ -223,8 +223,53 @@ interface ScrapedRail {
     /** Ids of channels THIS SAME `build()` call also returned in
      *  `channels`. An id belonging to another scraper, or one this call
      *  did not itself return, is dropped rather than resolved -- a rail is
-     *  not a way to reach into somebody else's catalogue. */
+     *  not a way to reach into somebody else's catalogue. Leave it `[]`
+     *  when the rail is described by `filter` instead. */
     channelIds: string[];
+    /** Shown small beside the heading ("Most widely carried"). Defaults to
+     *  "From <your scraper's name>". */
+    by?: string;
+    /** OPTIONAL. Where this rail sits in the lists of every rail: up to three
+     *  names joined by "/" ("Genres", "Countries/Europe"). Each name is a group
+     *  that opens and closes. Rails with no group are listed beside the groups. */
+    group?: string;
+    /** Describes the rail instead of listing it: the host fills it from
+     *  the finished index, ranked like every rail (what last night's check
+     *  proved first) and for the household looking, so a rail that means
+     *  "all of X" -- a country, a language, a genre -- never goes stale.
+     *  `channelIds` is ignored when this is present, and a filter rail is
+     *  never merged with another by heading. Every field present must
+     *  match; within a field any value does. See scrapers/iptv-org.mts. */
+    filter?: {
+        /** Country codes as your channels carry them in `country`. */
+        countries?: string[];
+        /** Your channels' own `categories` words. */
+        categories?: string[];
+        /** The host's genre ids, which fold every source's categories onto
+         *  one vocabulary: news, entertainment, movies, sports, kids, music,
+         *  documentary, lifestyle, business, devotional, general. */
+        genres?: string[];
+        /** ISO 639-3 codes on a channel's main feed. */
+        languages?: string[];
+        /** "home-first" lifts the household's own countries above the rest;
+         *  "first" keeps only the household's first market. Omitted: the same
+         *  for everyone. */
+        market?: "home-first" | "first";
+    };
+}
+
+/** A page to start the Live TV app with: a title and which of THIS
+ *  scraper's rails it carries, in order. Only a suggestion for a television
+ *  nobody has edited; anyone can add, remove and rearrange pages and rails
+ *  in Settings > Site layout. Pages from several scrapers with the same id
+ *  are one page. `rows`: 1 (default) is one line that scrolls sideways, n is
+ *  n lines scrolling together, 0 is as many as it takes to show everything
+ *  with no sideways scrolling. */
+interface ScrapedPage {
+    /** Slug, `[a-z0-9-]`, 32 characters or fewer. */
+    id: string;
+    title: string;
+    rails: { id: string; rows?: number }[];
 }
 
 interface ScrapedCatalogue {
@@ -232,6 +277,8 @@ interface ScrapedCatalogue {
     /** Leave out entirely if you have no opinion about grouping -- most
      *  scrapers do, and that is the normal case, not a missing feature. */
     rails?: ScrapedRail[];
+    /** Likewise optional: pages the app should start with. */
+    pages?: ScrapedPage[];
 }
 
 /** A value one of this scraper's own config fields can hold. */

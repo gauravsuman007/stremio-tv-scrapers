@@ -52,6 +52,9 @@ interface ScrapedRail {
     id: string;
     heading: string;
     channelIds: string[];
+    by?: string;
+    group?: string;
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
@@ -204,7 +207,7 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
     if (!loaded) throw new Error("futbolx: every category file failed");
     return {
         channels,
-        rails: channels.length ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id) }] : []
+        rails: channels.length ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id), group: "Live events" }] : []
     };
 }
 
@@ -263,7 +266,7 @@ function build(): Promise<ScrapedCatalogue> {
 export const futbolxScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Futbol-X",
-    version: "1.0.0",
+    version: "1.0.1",
     configSchema,
     tasks,
     build

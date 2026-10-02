@@ -96,6 +96,9 @@ interface ScrapedRail {
     id: string;
     heading: string;
     channelIds: string[];
+    by?: string;
+    group?: string;
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
@@ -422,7 +425,7 @@ async function buildEventsRail(): Promise<{ channels: ScrapedChannel[]; rails: S
     // Same rail name ntvst.mts uses -- the host merges any two scrapers'
     // rails whose headings match, so this lands in the same "Live Events"
     // rail rather than a separate one.
-    return { channels, rails: [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id) }] };
+    return { channels, rails: [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id), group: "Live events" }] };
 }
 
 async function build(): Promise<ScrapedCatalogue> {
@@ -440,7 +443,7 @@ async function build(): Promise<ScrapedCatalogue> {
 export const zliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.1.1",
+    version: "1.1.2",
     build
 };
 

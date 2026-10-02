@@ -82,6 +82,9 @@ interface ScrapedRail {
     id: string;
     heading: string;
     channelIds: string[];
+    by?: string;
+    group?: string;
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
@@ -676,14 +679,14 @@ async function build(): Promise<ScrapedCatalogue> {
 
     return {
         channels: [...channels, ...events],
-        rails: events.length ? [{ id: "live-events", heading: "Live Events", channelIds: events.map((e) => e.id) }] : []
+        rails: events.length ? [{ id: "live-events", heading: "Live Events", channelIds: events.map((e) => e.id), group: "Live events" }] : []
     };
 }
 
 export const dlhdScraper: Scraper = {
     id: SCRAPER_ID,
     name: "DaddyLive",
-    version: "1.0.0",
+    version: "1.0.1",
     configSchema,
     tasks,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },

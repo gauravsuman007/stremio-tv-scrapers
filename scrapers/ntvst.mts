@@ -115,6 +115,9 @@ interface ScrapedRail {
     id: string;
     heading: string;
     channelIds: string[];
+    by?: string;
+    group?: string;
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
@@ -680,7 +683,7 @@ async function buildEventsRail(server: string = DEFAULT_MATCH_SERVER): Promise<{
 
     return {
         channels: eventChannels.map((e) => e.channel),
-        rails: [{ id: "live-events", heading: "Live Events", channelIds: eventChannels.map((e) => e.channel.id) }]
+        rails: [{ id: "live-events", heading: "Live Events", channelIds: eventChannels.map((e) => e.channel.id), group: "Live events" }]
     };
 }
 
@@ -855,7 +858,7 @@ async function build(): Promise<ScrapedCatalogue> {
 export const ntvStScraper: Scraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.4.2",
+    version: "1.4.3",
     configSchema,
     tasks,
     build

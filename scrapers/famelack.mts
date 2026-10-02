@@ -50,6 +50,9 @@ interface ScrapedRail {
     id: string;
     heading: string;
     channelIds: string[];
+    by?: string;
+    group?: string;
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
@@ -219,13 +222,64 @@ async function build(): Promise<ScrapedCatalogue> {
     }
 
     if (!channels.length) throw new Error("famelack: no channels found");
-    return { channels };
+    return { channels, rails: categoryRails(channels, "Famelack") };
+}
+
+// -------------------------------------------------------------------------
+// Rails from this source's own category words.
+//
+// The host already folds the common words (news, sports, kids ...) into its
+// genre rails; what is left -- "Sitcoms + Comedy", "Animals & Nature" -- is
+// this source's own vocabulary, so it is declared as rails of its own,
+// grouped under "Categories / <source>" in the lists of every rail.
+// -------------------------------------------------------------------------
+
+/** Words the host's genre rails already carry, so a rail of their own would repeat one. */
+const GENRE_WORDS = new Set([
+    "news", "sports", "sport", "movies", "movie", "films", "film", "kids", "children", "animation", "music",
+    "documentary", "lifestyle", "business", "entertainment", "general", "religious", "education", "culture",
+    "legislative", "series", "family", "weather", "other"
+]);
+
+/** Never offered as a rail: shopping and adult shelves. */
+const UNLISTED = /\b(shop\w*|xxx|adult|erotic\w*|sinnlich\w*|telesales|18\+)\b/i;
+
+function categoryRails(channels: ScrapedChannel[], sourceName: string, min = 5, cap = 30): ScrapedRail[] {
+    const counts = new Map<string, number>();
+
+    for (const channel of channels) {
+        for (const word of new Set(channel.categories)) counts.set(word, (counts.get(word) || 0) + 1);
+    }
+
+    const taken = new Set<string>();
+    const rails: ScrapedRail[] = [];
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+    for (const [word, count] of ranked) {
+        const slug = `cat-${word.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`.slice(0, 40).replace(/-+$/, "");
+
+        if (count < min || word.length > 40 || GENRE_WORDS.has(word) || UNLISTED.test(word) || slug === "cat" || taken.has(slug)) continue;
+
+        taken.add(slug);
+        rails.push({
+            id: slug,
+            heading: word.replace(/(^|[\s(+&/-])(\p{L})/gu, (_all, lead: string, first: string) => lead + first.toUpperCase()).replace(/\bTv\b/g, "TV"),
+            by: `From ${sourceName}`,
+            channelIds: [],
+            filter: { categories: [word] },
+            group: `Categories/${sourceName.replace(/\//g, " ")}`
+        });
+
+        if (rails.length >= cap) break;
+    }
+
+    return rails;
 }
 
 export const famelackScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Famelack",
-    version: "1.0.0",
+    version: "1.1.0",
     build
 };
 
