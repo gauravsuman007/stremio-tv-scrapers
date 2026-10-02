@@ -54,7 +54,7 @@ interface ScrapedRail {
     channelIds: string[];
     by?: string;
     group?: string;
-    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; market?: "home-first" | "first" };
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; sources?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
