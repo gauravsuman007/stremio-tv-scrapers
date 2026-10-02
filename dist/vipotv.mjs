@@ -243,6 +243,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
     const perCountry = new Map();
     const perLanguage = new Map();
     const perWord = new Map();
+    const perNetwork = new Map();
     for (const channel of channels) {
         if (channel.country) {
             const entry = perCountry.get(channel.country) || { n: 0, names: new Map() };
@@ -255,6 +256,11 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
             perLanguage.set(code, (perLanguage.get(code) || 0) + 1);
         for (const word of new Set(channel.categories))
             perWord.set(word, (perWord.get(word) || 0) + 1);
+        const network = (channel.network || "").trim();
+        if (network) {
+            const key = network.toLowerCase();
+            perNetwork.set(key, { n: (perNetwork.get(key)?.n || 0) + 1, name: perNetwork.get(key)?.name || network });
+        }
     }
     function byCount(a, b, size) {
         return size(b[1]) - size(a[1]) || a[0].localeCompare(b[0]);
@@ -318,6 +324,25 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
                 break;
         }
     }
+    if (wanted.networks !== false) {
+        let added = 0;
+        for (const [key, entry] of [...perNetwork.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]))) {
+            const slug = `network-${key.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`.slice(0, 40).replace(/-+$/, "");
+            if (entry.n < 3 || key.length < 3 || key.length > 30 || slug === "network" || UNLISTED.test(key) || /[^\p{L}\p{N} &.+'-]/u.test(key) || sourceName.toLowerCase().includes(key) || key.includes(sourceName.toLowerCase()))
+                continue;
+            rails.push({
+                id: slug,
+                heading: entry.name,
+                by: "One network",
+                group: "Networks",
+                channelIds: [],
+                filter: { networks: [key] }
+            });
+            added += 1;
+            if (added >= 60)
+                break;
+        }
+    }
     if (channels.length >= 4) {
         rails.push({
             id: "source",
@@ -333,7 +358,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const vipotvScraper = {
     id: SCRAPER_ID,
     name: "vipotv",
-    version: "1.1.0",
+    version: "1.2.0",
     build
 };
 // -------------------------------------------------------------------------
