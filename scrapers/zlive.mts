@@ -1007,7 +1007,7 @@ const DECODER = "tiktikpx";
 export const zliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.4.0",
+    version: "1.4.1",
     resolvers: { zlive: resolveHandle },
     decoders: {
         [DECODER]: (segment) => {
