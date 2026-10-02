@@ -49,6 +49,7 @@ interface ScrapedRail {
         genres?: string[];
         languages?: string[];
         sources?: string[];
+        networks?: string[];
         market?: "home-first" | "first";
     };
 }
@@ -476,11 +477,12 @@ const GENRE_NAMES = new Set([
 /** Never offered as a rail: shopping and adult shelves. */
 const UNLISTED = /\b(shop\w*|xxx|adult|erotic\w*|sinnlich\w*|telesales|18\+)\b/i;
 
-function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: string, wanted = { countries: false, languages: false, categories: true }): ScrapedRail[] {
+function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: string, wanted: { countries: boolean; languages: boolean; categories: boolean; networks?: boolean } = { countries: false, languages: false, categories: true }): ScrapedRail[] {
     const rails: ScrapedRail[] = [];
     const perCountry = new Map<string, { n: number; names: Map<string, number> }>();
     const perLanguage = new Map<string, number>();
     const perWord = new Map<string, number>();
+    const perNetwork = new Map<string, { n: number; name: string }>();
 
     for (const channel of channels) {
         if (channel.country) {
@@ -493,6 +495,14 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 
         for (const code of new Set(channel.languages)) perLanguage.set(code, (perLanguage.get(code) || 0) + 1);
         for (const word of new Set(channel.categories)) perWord.set(word, (perWord.get(word) || 0) + 1);
+
+        const network = (channel.network || "").trim();
+
+        if (network) {
+            const key = network.toLowerCase();
+
+            perNetwork.set(key, { n: (perNetwork.get(key)?.n || 0) + 1, name: perNetwork.get(key)?.name || network });
+        }
     }
 
     function byCount<T>(a: [string, T], b: [string, T], size: (value: T) => number): number {
@@ -565,6 +575,28 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
         }
     }
 
+    if (wanted.networks !== false) {
+        let added = 0;
+
+        for (const [key, entry] of [...perNetwork.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]))) {
+            const slug = `network-${key.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`.slice(0, 40).replace(/-+$/, "");
+
+            if (entry.n < 3 || key.length < 3 || key.length > 30 || slug === "network" || UNLISTED.test(key) || /[^\p{L}\p{N} &.+'-]/u.test(key) || sourceName.toLowerCase().includes(key) || key.includes(sourceName.toLowerCase())) continue;
+
+            rails.push({
+                id: slug,
+                heading: entry.name,
+                by: "One network",
+                group: "Networks",
+                channelIds: [],
+                filter: { networks: [key] }
+            });
+
+            added += 1;
+            if (added >= 60) break;
+        }
+    }
+
     if (channels.length >= 4) {
         rails.push({
             id: "source",
@@ -582,7 +614,7 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const iptvOrgScraper: Scraper = {
     id: "iptv-org",
     name: "iptv-org",
-    version: "1.3.0",
+    version: "1.4.0",
     build
 };
 

@@ -30,6 +30,23 @@
  *   4. The request body is `{ p: <ciphertext b64>, n: <iv b64>,
  *      g: <tag b64>, k: "<the same YYYY-MM-DD used for the key> }`.
  *
+ * PROTOCOL v4 (Oct 2026), detected at runtime -- see `detectProtocol`: the
+ * site stopped accepting the v3 handshake above WITHOUT refusing it.
+ * `/resolve` still answered 200 with a well-formed `location`, which led to
+ * a 60-second looping "scrapers go away" card served as a VOD playlist, for
+ * every channel. v4 is the same envelope with `GET /nonce` first:
+ * `key = SHA-256("<nonce>|<date>|<new salt>|v4")` and the nonce echoed back
+ * as `x` in the body. Read off the live site by hooking `fetch` and
+ * `crypto.subtle` in a browser while it opened a channel. Both protocols are
+ * kept: whichever one gets a LIVE playlist (no `#EXT-X-ENDLIST`) for a few
+ * probe channels from different upstreams wins, newest first on a tie.
+ *
+ * NOTHING IS RESOLVED AT SCRAPE TIME any more. The address `/resolve` hands
+ * back is signed and good for two and a half hours, so resolved once per
+ * rebuild it was stale most of the day. Each stream's `url` is a HANDLE
+ * (`https://zlive.invalid/<key>`) and the host calls `resolvers.zlive` with
+ * it whenever it checks or plays the channel. See `ScrapedStream.resolver`.
+ *
  * `resolve()` answers `{ location: <url> }` -- sometimes a direct CDN
  * `.m3u8` (`epidd.hundxvision.co.uk/main/secure/<hash>/<ts>/<slug>.m3u8`),
  * sometimes a same-shape proxy (`route.transcode.cfd/m3u8-proxy.m3u8?
@@ -76,7 +93,16 @@ interface ScrapedStream {
     labels: string[];
     referrer: string;
     userAgent: string;
+    resolver?: string;
 }
+
+interface ResolvedStream {
+    url: string;
+    referrer?: string;
+    userAgent?: string;
+}
+
+type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
 
 interface ScrapedChannel {
     id: string;
@@ -98,7 +124,7 @@ interface ScrapedRail {
     channelIds: string[];
     by?: string;
     group?: string;
-    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; sources?: string[]; market?: "home-first" | "first" };
+    filter?: { countries?: string[]; categories?: string[]; genres?: string[]; languages?: string[]; sources?: string[]; networks?: string[]; market?: "home-first" | "first" };
 }
 
 interface ScrapedCatalogue {
@@ -137,6 +163,7 @@ interface Scraper {
     version?: string;
     configSchema?: ScraperConfigField[];
     tasks?: ScraperTask[];
+    resolvers?: Record<string, StreamResolver>;
     build(): Promise<ScrapedCatalogue>;
 }
 
@@ -162,23 +189,6 @@ async function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms = 20
     }
 }
 
-/** Runs `items` through `worker` with at most `limit` in flight at once --
- *  each channel needs its own `/resolve` round-trip, and doing ~200 of
- *  those fully in parallel is an unnecessary burst against one host. */
-async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
-    const results: R[] = new Array(items.length);
-    let next = 0;
-    async function run(): Promise<void> {
-        for (;;) {
-            const index = next++;
-            if (index >= items.length) return;
-            results[index] = await worker(items[index] as T);
-        }
-    }
-    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => run()));
-    return results;
-}
-
 const BASE = "https://iptv.zlive.st";
 const REFERRER = "https://zlive.st/";
 const USER_AGENT =
@@ -186,12 +196,18 @@ const USER_AGENT =
 
 /** XOR-decoded once from the bundle's obfuscated `Ry`/`Py` byte arrays
  *  (`Ny(Ry, Py)` in the site's own minified code) -- see the module
- *  docstring for how this was recovered. Fixed, not request-specific. */
-const ZLIVE_SALT = "J7dRYVTWoySiukvBBY5hXvMvBdBZ_b08wBYlz_BrSXg";
+ *  docstring for how this was recovered. Fixed, not request-specific.
+ *  LEGACY (protocol "v3"): the site stopped accepting this around Oct 2026. */
+const ZLIVE_SALT_V3 = "J7dRYVTWoySiukvBBY5hXvMvBdBZ_b08wBYlz_BrSXg";
 
-/** The literal suffix the site's own `Rg()` appends after the salt before
- *  hashing -- confirmed by logging `crypto.subtle.digest`'s real input. */
-const ZLIVE_KEY_VERSION = "v3";
+/** The literal suffix the v3 `Rg()` appends after the salt before hashing. */
+const ZLIVE_KEY_VERSION_V3 = "v3";
+
+/** Protocol "v4", read off the live site by hooking `fetch` and
+ *  `crypto.subtle` in a real browser while it opened a channel: the key is
+ *  `SHA-256("<nonce>|<date>|<salt>|v4")`, `<nonce>` coming from
+ *  `GET /nonce` and sent back in the body as `x`. */
+const ZLIVE_SALT_V4 = "3Uk3tEhWN38sNt_F6lykbYiFdpaVRInfjaaZuTY__gQ";
 
 interface ZliveChannel {
     id: string;
@@ -221,14 +237,13 @@ function todayKeyDate(): string {
     return `${y}-${m}-${d}`;
 }
 
-/** The site's `Rg()`: derives an AES-GCM key from today's date plus the
- *  fixed salt, then encrypts `payload` under a fresh random IV. Returns
- *  exactly the four fields zlive's `/streams` and `/resolve` endpoints
- *  expect in their request body. */
-async function encryptEnvelope(payload: unknown): Promise<{ p: string; n: string; g: string; k: string }> {
-    const dateKey = todayKeyDate();
-    const digestInput = new TextEncoder().encode(`${dateKey}|${ZLIVE_SALT}${ZLIVE_KEY_VERSION}`);
-    const keyBytes = await crypto.subtle.digest("SHA-256", digestInput);
+type Envelope = { p: string; n: string; g: string; k: string; x?: string };
+type ProtocolId = "v4" | "v3";
+
+/** AES-GCM-encrypts `payload` under the key `SHA-256(digestInput)` and
+ *  returns the body fields both protocols share. */
+async function seal(digestInput: string, dateKey: string, payload: unknown): Promise<Envelope> {
+    const keyBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(digestInput));
     const aesKey = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"]);
 
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -244,6 +259,36 @@ async function encryptEnvelope(payload: unknown): Promise<{ p: string; n: string
     };
 }
 
+/** LEGACY envelope: date + fixed salt, no nonce. */
+async function envelopeV3(payload: unknown, _signal: AbortSignal): Promise<Envelope> {
+    const dateKey = todayKeyDate();
+    return seal(`${dateKey}|${ZLIVE_SALT_V3}${ZLIVE_KEY_VERSION_V3}`, dateKey, payload);
+}
+
+/** CURRENT envelope: a one-off nonce from the server is part of the key and
+ *  is echoed back as `x`. */
+async function envelopeV4(payload: unknown, signal: AbortSignal): Promise<Envelope> {
+    const response = await fetch(`${BASE}/nonce`, { signal, headers: { "User-Agent": USER_AGENT, Referer: REFERRER } });
+    if (!response.ok) throw new Error(`/nonce -> ${response.status}`);
+
+    const nonce = ((await response.json()) as { n?: string }).n;
+    if (!nonce) throw new Error("/nonce answered without a nonce");
+
+    const dateKey = todayKeyDate();
+    return { ...(await seal(`${nonce}|${dateKey}|${ZLIVE_SALT_V4}|v4`, dateKey, payload)), x: nonce };
+}
+
+const PROTOCOLS: Record<ProtocolId, (payload: unknown, signal: AbortSignal) => Promise<Envelope>> = {
+    v4: envelopeV4,
+    v3: envelopeV3
+};
+
+/** Newest first: when two both look fine, the newer one wins. */
+const PROTOCOL_ORDER: ProtocolId[] = ["v4", "v3"];
+
+/** The protocol the last detection settled on (only used to log a change). */
+let activeProtocol: ProtocolId = "v4";
+
 async function fetchChannelList(signal: AbortSignal): Promise<ZliveChannel[]> {
     const response = await fetch(`${BASE}/channels.json`, {
         signal,
@@ -253,28 +298,172 @@ async function fetchChannelList(signal: AbortSignal): Promise<ZliveChannel[]> {
     return (await response.json()) as ZliveChannel[];
 }
 
-/** Turns one channel's opaque `sources[].key` into a real stream URL via
- *  `POST /resolve`. Returns `null` rather than throwing on a single
- *  channel's failure -- one dead upstream key should not fail the whole
- *  catalogue, matching how `cdnlive`/`hesgoales` failures are handled in
- *  ntvst.mts. */
-async function resolveSourceKey(key: string, signal: AbortSignal): Promise<string | null> {
-    if (/^https?:\/\//i.test(key)) return key;
+/** One `/resolve` round trip under an explicit protocol; throws on failure. */
+async function resolveWith(protocol: ProtocolId, key: string, signal: AbortSignal): Promise<string | null> {
+    const envelope = await PROTOCOLS[protocol]({ c: key, t: Math.floor(Date.now() / 1000) }, signal);
+    const response = await fetch(`${BASE}/resolve`, {
+        method: "POST",
+        signal,
+        headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, Referer: REFERRER },
+        body: JSON.stringify(envelope)
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { location?: string };
+    return body.location || null;
+}
 
+// --- which protocol does the site speak today? ------------------------------
+
+/**
+ * WHY THIS IS DETECTED AND NOT ASSUMED.
+ *
+ * zlive changed its handshake without notice (v3 -> v4, Oct 2026) and the
+ * old one was NOT refused: `/resolve` still answered 200 with a perfectly
+ * well-formed `location`, which led to a 60-second looping clip of a
+ * "scrapers go away" card, served as a VOD playlist. Every layer above
+ * this one -- the playlist check, the nightly deep check that follows a
+ * source to real bytes -- calls that a working channel, because it is one.
+ * Nothing errors. So the answer to "did my envelope work" has to come from
+ * looking at what the location serves.
+ *
+ * A live channel never has `#EXT-X-ENDLIST`. The decoy is a short VOD with
+ * one, which is the whole test.
+ */
+type Served = "live" | "decoy" | "dead";
+
+async function classify(location: string, signal: AbortSignal): Promise<Served> {
     try {
-        const envelope = await encryptEnvelope({ c: key, t: Math.floor(Date.now() / 1000) });
-        const response = await fetch(`${BASE}/resolve`, {
-            method: "POST",
-            signal,
-            headers: { "Content-Type": "application/json", "User-Agent": USER_AGENT, Referer: REFERRER },
-            body: JSON.stringify(envelope)
-        });
-        if (!response.ok) return null;
-        const body = (await response.json()) as { location?: string };
-        return body.location || null;
+        const response = await fetch(location, { signal, headers: { "User-Agent": USER_AGENT, Referer: REFERRER } });
+        if (!response.ok) return "dead";
+
+        const text = await response.text();
+        if (!text.trimStart().startsWith("#EXTM3U")) return "dead";
+
+        if (/#EXT-X-ENDLIST/.test(text)) {
+            const seconds = [...text.matchAll(/#EXTINF:([\d.]+)/g)].reduce((sum, hit) => sum + Number(hit[1]), 0);
+            if (seconds <= 300) return "decoy";
+        }
+
+        return "live";
+    } catch {
+        return "dead";
+    }
+}
+
+/** Picks the protocol the site currently honours. Probes a few channels
+ *  from DIFFERENT upstream sources (a whole upstream can be down, and that
+ *  must not read as a wrong protocol). `live` outranks `dead`, and `dead`
+ *  outranks `decoy`/failure: a 404 means the envelope was accepted. */
+async function detectProtocol(channels: ZliveChannel[]): Promise<ProtocolId> {
+    const bySource = new Map<string, string>();
+    for (const entry of channels) {
+        const source = entry.sources[0];
+        if (source && !/^https?:\/\//i.test(source.key) && !bySource.has(source.label || "?")) bySource.set(source.label || "?", source.key);
+    }
+
+    const keys = [...bySource.values()].slice(0, 4);
+    const score: Record<ProtocolId, number> = { v4: 0, v3: 0 };
+
+    for (const protocol of PROTOCOL_ORDER) {
+        for (const key of keys) {
+            const served = await withTimeout(async (signal) => {
+                const location = await resolveWith(protocol, key, signal);
+                return location ? classify(location, signal) : ("dead" as Served);
+            }, 20_000).catch(() => "decoy" as Served);
+
+            // A resolve that failed outright is scored with the decoy: no evidence for.
+            if (served === "live") score[protocol] += 2;
+            else if (served === "dead") score[protocol] += 1;
+        }
+    }
+
+    const best = PROTOCOL_ORDER.reduce((a, b) => (score[b] > score[a] ? b : a));
+    if (score[best] === 0) {
+        throw new Error("neither crypto protocol gets past the anti-scraper decoy (the site changed again?)");
+    }
+
+    if (best !== activeProtocol) console.log(`zlive: crypto protocol is now ${best} (was ${activeProtocol})`);
+    return best;
+}
+
+/**
+ * The protocol in force, detected lazily and remembered briefly. Ten minutes
+ * when it worked (long enough that a nightly sweep resolving two hundred
+ * channels probes once, short enough that a change of handshake is noticed
+ * the same hour), one minute when it did not (so a site that is down is not
+ * probed once per request).
+ *
+ * `force` is for a resolve that failed under the remembered answer -- the
+ * handshake may just have changed -- and is honoured at most once a minute,
+ * or one dead channel would re-probe the site every time it was pressed.
+ */
+const PROTOCOL_GOOD_MS = 10 * 60_000;
+const PROTOCOL_BAD_MS = 60_000;
+
+let detected: { at: number; protocol: ProtocolId | null } | null = null;
+let detecting: Promise<ProtocolId | null> | null = null;
+
+async function protocolNow(force = false): Promise<ProtocolId | null> {
+    if (detected) {
+        const age = Date.now() - detected.at;
+        const limit = force ? PROTOCOL_BAD_MS : detected.protocol ? PROTOCOL_GOOD_MS : PROTOCOL_BAD_MS;
+        if (age < limit) return detected.protocol;
+    }
+
+    if (!detecting) {
+        detecting = (async () => {
+            try {
+                const list = await withTimeout((signal) => fetchChannelList(signal));
+                const protocol = await detectProtocol(list);
+                activeProtocol = protocol;
+                detected = { at: Date.now(), protocol };
+                return protocol;
+            } catch (cause) {
+                console.error(`zlive: ${cause instanceof Error ? cause.message : cause}`);
+                detected = { at: Date.now(), protocol: null };
+                return null;
+            } finally {
+                detecting = null;
+            }
+        })();
+    }
+
+    return detecting;
+}
+
+// --- handles, and the resolver the host calls with them ---------------------
+
+/** A stream's `url` here is a HANDLE, never fetched: the host stores its
+ *  evidence under it and calls `resolveHandle` for every check and play.
+ *  `.invalid` can never resolve, so a handle that escaped fails cleanly. */
+function handleFor(key: string): string {
+    return `https://zlive.invalid/${encodeURIComponent(key)}`;
+}
+
+function keyOfHandle(handle: string): string | null {
+    try {
+        const url = new URL(handle);
+        return url.hostname === "zlive.invalid" ? decodeURIComponent(url.pathname.slice(1)) : null;
     } catch {
         return null;
     }
+}
+
+/** What the host asks for at the moment a channel is checked or played:
+ *  a signed address that is good for about two and a half hours from NOW. */
+async function resolveHandle(handle: string): Promise<ResolvedStream | null> {
+    const key = keyOfHandle(handle);
+    if (!key) return null;
+
+    for (const force of [false, true]) {
+        const protocol = await protocolNow(force);
+        if (!protocol) return null;
+
+        const url = await withTimeout((signal) => resolveWith(protocol, key, signal), 10_000).catch(() => null);
+        if (url) return { url, referrer: REFERRER, userAgent: USER_AGENT };
+    }
+
+    return null;
 }
 
 /** zlive's own `flag` field is already a lowercase ISO 3166-1 alpha-2 code
@@ -293,13 +482,13 @@ function categoriesFor(sport: string | undefined): string[] {
 
 async function fetchChannels(): Promise<ScrapedChannel[]> {
     const rawChannels = await withTimeout((signal) => fetchChannelList(signal));
+    await protocolNow();
 
-    const resolved = await mapWithConcurrency(rawChannels, 8, async (entry) => {
+    const resolved = rawChannels.map((entry) => {
         const source = entry.sources[0];
         if (!source) return null;
 
-        const url = await withTimeout((signal) => resolveSourceKey(source.key, signal), 15_000);
-        if (!url) return null;
+        const direct = /^https?:\/\//i.test(source.key);
 
         const country = (entry.flag || "").toUpperCase();
         const channel: ScrapedChannel = {
@@ -315,11 +504,12 @@ async function fetchChannels(): Promise<ScrapedChannel[]> {
             network: "",
             streams: [
                 {
-                    url,
+                    url: direct ? source.key : handleFor(source.key),
                     quality: entry.quality || "",
                     labels: entry.tagline ? [entry.tagline] : [],
                     referrer: REFERRER,
-                    userAgent: USER_AGENT
+                    userAgent: USER_AGENT,
+                    ...(direct ? {} : { resolver: "zlive" })
                 }
             ]
         };
@@ -370,7 +560,10 @@ function eventTitle(entry: ZliveEvent): string {
 }
 
 async function fetchLiveEvents(signal: AbortSignal): Promise<ZliveEvent[]> {
-    const envelope = await encryptEnvelope({ t: Math.floor(Date.now() / 1000) });
+    const protocol = await protocolNow();
+    if (!protocol) return [];
+
+    const envelope = await PROTOCOLS[protocol]({ t: Math.floor(Date.now() / 1000) }, signal);
     const response = await fetch(`${BASE}/streams`, {
         method: "POST",
         signal,
@@ -386,12 +579,11 @@ async function buildEventsRail(): Promise<{ channels: ScrapedChannel[]; rails: S
     const events = await withTimeout((signal) => fetchLiveEvents(signal));
     if (!events.length) return { channels: [], rails: [] };
 
-    const resolved = await mapWithConcurrency(events, 8, async (entry) => {
+    const resolved = events.map((entry) => {
         const source = entry.sources?.[0];
         if (!source) return null;
 
-        const url = await withTimeout((signal) => resolveSourceKey(source.key, signal), 15_000).catch(() => null);
-        if (!url) return null;
+        const direct = /^https?:\/\//i.test(source.key);
 
         const category = entry.category || entry.sport || entry.league || "uncategorized";
         const rawId = entry.id ?? entry.key ?? entry.slug ?? eventTitle(entry);
@@ -408,11 +600,12 @@ async function buildEventsRail(): Promise<{ channels: ScrapedChannel[]; rails: S
             network: "",
             streams: [
                 {
-                    url,
+                    url: direct ? source.key : handleFor(source.key),
                     quality: entry.quality || "",
                     labels: entry.tagline ? [entry.tagline] : ["Live event"],
                     referrer: REFERRER,
-                    userAgent: USER_AGENT
+                    userAgent: USER_AGENT,
+                    ...(direct ? {} : { resolver: "zlive" })
                 }
             ]
         };
@@ -483,11 +676,12 @@ const GENRE_NAMES = new Set([
 /** Never offered as a rail: shopping and adult shelves. */
 const UNLISTED = /\b(shop\w*|xxx|adult|erotic\w*|sinnlich\w*|telesales|18\+)\b/i;
 
-function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: string, wanted = { countries: true, languages: true, categories: true }): ScrapedRail[] {
+function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: string, wanted: { countries: boolean; languages: boolean; categories: boolean; networks?: boolean } = { countries: true, languages: true, categories: true }): ScrapedRail[] {
     const rails: ScrapedRail[] = [];
     const perCountry = new Map<string, { n: number; names: Map<string, number> }>();
     const perLanguage = new Map<string, number>();
     const perWord = new Map<string, number>();
+    const perNetwork = new Map<string, { n: number; name: string }>();
 
     for (const channel of channels) {
         if (channel.country) {
@@ -500,6 +694,14 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 
         for (const code of new Set(channel.languages)) perLanguage.set(code, (perLanguage.get(code) || 0) + 1);
         for (const word of new Set(channel.categories)) perWord.set(word, (perWord.get(word) || 0) + 1);
+
+        const network = (channel.network || "").trim();
+
+        if (network) {
+            const key = network.toLowerCase();
+
+            perNetwork.set(key, { n: (perNetwork.get(key)?.n || 0) + 1, name: perNetwork.get(key)?.name || network });
+        }
     }
 
     function byCount<T>(a: [string, T], b: [string, T], size: (value: T) => number): number {
@@ -572,6 +774,28 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
         }
     }
 
+    if (wanted.networks !== false) {
+        let added = 0;
+
+        for (const [key, entry] of [...perNetwork.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]))) {
+            const slug = `network-${key.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`.slice(0, 40).replace(/-+$/, "");
+
+            if (entry.n < 3 || key.length < 3 || key.length > 30 || slug === "network" || UNLISTED.test(key) || /[^\p{L}\p{N} &.+'-]/u.test(key) || sourceName.toLowerCase().includes(key) || key.includes(sourceName.toLowerCase())) continue;
+
+            rails.push({
+                id: slug,
+                heading: entry.name,
+                by: "One network",
+                group: "Networks",
+                channelIds: [],
+                filter: { networks: [key] }
+            });
+
+            added += 1;
+            if (added >= 60) break;
+        }
+    }
+
     if (channels.length >= 4) {
         rails.push({
             id: "source",
@@ -589,7 +813,8 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
 export const zliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.2.0",
+    version: "1.4.0",
+    resolvers: { zlive: resolveHandle },
     build
 };
 

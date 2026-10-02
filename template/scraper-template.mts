@@ -251,6 +251,10 @@ interface ScrapedRail {
         genres?: string[];
         /** ISO 639-3 codes on a channel's main feed. */
         languages?: string[];
+        /** Network names as your channels carry them in `network`, case-folded. */
+        networks?: string[];
+        /** Ids of sources: "everything on <your scraper id>". */
+        sources?: string[];
         /** "home-first" lifts the household's own countries above the rest;
          *  "first" keeps only the household's first market. Omitted: the same
          *  for everyone. */
