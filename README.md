@@ -4,8 +4,8 @@ Live-TV/sports scrapers for [stremio-tv](https://github.com/gauravsuman007):
 24/7 channels and live sporting events, scraped straight from a site's own
 CDN with no torrent or debrid step. stremio-tv ships with nothing built
 in — every active scraper here is how it actually gets its live-TV
-channels (iptv-org moved into the live-tv plugin repo itself as its
-bundled default scraper — see [`archive/`](archive) below). Each file is a
+channels, including iptv-org, the default scraper of the standalone
+[live-tv](https://github.com/gauravsuman007/live-tv) app. Each file is a
 standalone `Scraper` (one `build()`
 function returning a full catalogue) that compiles to a plain `.mjs` file
 in [`dist/`](dist), committed (not gitignored) so stremio-tv's Settings >
@@ -100,21 +100,16 @@ plus a browser-like `User-Agent`; see the module docstring for the full
 algorithm and for why its `/streams` endpoint (same crypto, a live-sporting-
 events feed) is deliberately not scraped here.
 
-## [`archive/iptv-org.mts`](./archive/iptv-org.mts) — iptv-org (archived)
+## [`scrapers/iptv-org.mts`](./scrapers/iptv-org.mts) — iptv-org
 
-No longer live here. This scraper now lives in the
-[stremio-tv-plugin-live-tv](https://github.com/gauravsuman007/stremio-tv-plugin-live-tv)
-repository itself (`scrapers/iptv-org.mts`), bundled as that plugin's
-default scraper and seeded into a fresh deployment automatically — no
-GitHub import needed any more. The copy under `archive/` is frozen at the
-point it moved, kept for reference only: it is not compiled, not in
-`dist/`, and not importable through Settings > Live TV > Sources > "Import
-from GitHub" (that importer only reads `dist/`). It was still a good
-second worked example, alongside `ntvst.mts`, for a source that already
-publishes clean JSON across a handful of small endpoints (channels,
-streams, feeds, logos, countries, a blocklist) rather than one that needs
-reverse-engineering — its own header comment still explains its `iptv:`
-id-prefix exception and the rest of its design.
+iptv-org's curated, deduplicated JSON (channels, streams, feeds, logos,
+countries, a blocklist). This is the **default scraper of the
+[live-tv](https://github.com/gauravsuman007/live-tv) app**: a fresh data
+volume fetches `dist/iptv-org.mjs` from here on first start, and later
+updates arrive through the normal "Check for updates" (bump its `version`).
+It is also a good worked example, alongside `ntvst.mts`, for a source that
+already publishes clean JSON rather than one needing reverse-engineering; its
+header explains its `iptv:` id-prefix exception and the rest of its design.
 
 ## The contract
 

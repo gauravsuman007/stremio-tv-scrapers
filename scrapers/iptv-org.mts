@@ -1,24 +1,18 @@
 /**
- * ARCHIVED -- kept for reference only, no longer live.
+ * iptv-org's own curated, deduplicated JSON -- a real source, and the DEFAULT
+ * scraper of the live-tv app (github.com/gauravsuman007/live-tv), which
+ * fetches `dist/iptv-org.mjs` from this repository the first time it starts
+ * on an empty data volume and then keeps it current through its ordinary
+ * "Check for updates" on Settings > Live TV > Sources (a real `version`
+ * increase here is what replaces it). It is also a worked example, beside
+ * ntvst.mts, for a source that already publishes clean JSON across a handful
+ * of small endpoints rather than one that has to be reverse-engineered.
  *
- * This scraper moved into the stremio-tv-plugin-live-tv repository itself
- * (github.com/gauravsuman007/stremio-tv-plugin-live-tv, `scrapers/iptv-org.mts`),
- * which now ships it as that plugin's bundled default scraper -- seeded
- * into a fresh deployment's `scrapers/` directory on load, no GitHub
- * import needed. This copy is frozen at the point it was moved and is not
- * maintained here any more; it is not importable through Settings > Live
- * TV > Sources > "Import from GitHub" either, since only `dist/` (not
- * `archive/`) is read by that importer, and this file has been pulled out
- * of `dist/` on purpose. See the live-tv plugin repo's own AGENTS.md/README
- * for the current version and its update mechanism.
- *
- * The rest of this header comment is left as it was when this scraper was
- * still live here, for context on what it was and how it worked:
- *
- * iptv-org's own curated, deduplicated JSON -- a real source, and also a
- * worked example alongside ntvst.mts for a source that already publishes
- * clean, well-typed data across several small endpoints rather than one
- * that has to be reverse-engineered.
+ * Its `iptv:` id prefix and the id `iptv-org` are never renamed: channel ids,
+ * the nightly checks and the cached logos are all keyed under them. If you
+ * want a similar scraper for a DIFFERENT source, copy this file and give it
+ * a different id -- two scrapers sharing an id is refused everywhere a
+ * scraper is loaded, first one loaded wins.
  */
 
 interface ScrapedStream {

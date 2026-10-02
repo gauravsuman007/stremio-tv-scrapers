@@ -186,11 +186,7 @@ template's header -- this is the short version):
   repository is built around, and the route
   [`scrapers/ntvst.mts`](scrapers/ntvst.mts) actually reaches a stremio-tv
   deployment by -- stremio-tv ships with nothing built in, so this is not
-  a fallback route for it. (iptv-org used to reach stremio-tv this same
-  way; it has since moved into the stremio-tv-plugin-live-tv repository
-  itself as that plugin's bundled default scraper, and its copy here is
-  archived -- see [`archive/iptv-org.mts`](archive/iptv-org.mts) and the
-  README.)
+  a fallback route for it. (iptv-org, [`scrapers/iptv-org.mts`](scrapers/iptv-org.mts), is the default scraper of the standalone live-tv app, which fetches its `dist/iptv-org.mjs` from here on first start -- so its `id` and `iptv:` prefix are never renamed, and a `version` bump is what updates running installs.)
 - **Drop it in, no rebuild.** Copy `dist/<your-id>.mjs` into the
   `scrapers` directory on that deployment's mounted data volume, then
   either restart the container or use the "Reload sources" action on its
