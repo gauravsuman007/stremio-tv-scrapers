@@ -100,6 +100,44 @@ const GROUPS = {
     Turkey: { country: "TR", language: "tur" },
     "United Kingdom": { country: "GB", language: "eng" }
 };
+/**
+ * "Arabia" and "Balkans" are grab-bags with no country. The names usually
+ * say where a channel is from, in words that mean one place and only that,
+ * so those are read; anything ambiguous keeps no country.
+ */
+const NAME_COUNTRIES = [
+    [/\b(algeria|alg|dz)\b/i, "DZ"],
+    [/\b(morocco|maroc|2m)\b/i, "MA"],
+    [/\b(tunisia|tunisie)\b/i, "TN"],
+    [/\b(libya)\b/i, "LY"],
+    [/\b(egypt|misr)\b/i, "EG"],
+    [/\b(jordan|amman)\b/i, "JO"],
+    [/\b(palestine)\b/i, "PS"],
+    [/\b(lebanon|liban)\b/i, "LB"],
+    [/\b(syria)\b/i, "SY"],
+    [/\b(iraq|iraqi)\b/i, "IQ"],
+    [/\b(kuwait)\b/i, "KW"],
+    [/\b(oman)\b/i, "OM"],
+    [/\b(qatar|kass)\b/i, "QA"],
+    [/\b(ksa|saudi|ssc)\b/i, "SA"],
+    [/\b(abu dhabi|dubai|uae)\b/i, "AE"],
+    [/\b(bahrain)\b/i, "BH"],
+    [/\b(yemen|aden)\b/i, "YE"],
+    [/\b(sudan)\b/i, "SD"],
+    [/\b(afghanistan|afg)\b/i, "AF"],
+    [/\b(argentina|arg)\b/i, "AR"]
+];
+const COUNTRY_TITLES = {
+    DZ: "Algeria", MA: "Morocco", TN: "Tunisia", LY: "Libya", EG: "Egypt", JO: "Jordan", PS: "Palestine", LB: "Lebanon",
+    SY: "Syria", IQ: "Iraq", KW: "Kuwait", OM: "Oman", QA: "Qatar", SA: "Saudi Arabia", AE: "United Arab Emirates",
+    BH: "Bahrain", YE: "Yemen", SD: "Sudan", AF: "Afghanistan", AR: "Argentina"
+};
+function countryTitle(code) {
+    return COUNTRY_TITLES[code] || code;
+}
+function countryFromName(name) {
+    return NAME_COUNTRIES.find(([pattern]) => pattern.test(name))?.[1] || "";
+}
 async function post(host, action, body) {
     const response = await withTimeout((signal) => fetch(`${host.base}/${host.engine}-${action}.json`, {
         method: "POST",
@@ -224,12 +262,14 @@ async function build() {
                 existing.logo = item.logo;
             return;
         }
-        const meta = GROUPS[group] || { country: "", language: "" };
+        const known = GROUPS[group] || { country: "", language: "" };
+        const guessed = known.country ? "" : countryFromName(item.name);
+        const meta = guessed ? { ...known, country: guessed } : known;
         const channel = {
             id: idFor(key),
             name,
             country: meta.country,
-            countryName: meta.country ? group : "",
+            countryName: guessed ? countryTitle(guessed) : meta.country ? group : "",
             countryFlag: flagEmoji(meta.country),
             categories: meta.category ? [meta.category] : [],
             languages: meta.language ? [meta.language] : [],
@@ -243,12 +283,141 @@ async function build() {
     });
     if (!channels.length)
         throw new Error("vavoo: no channel resolved to a stream");
-    return { channels };
+    return { channels, rails: railsFor(channels, SCRAPER_ID, "vavoo.to") };
+}
+// -------------------------------------------------------------------------
+// Rails from this source's own data: its countries, its languages, its
+// category words, and "everything on this source".
+//
+// The host merges rails with the same name (or the same filter) from every
+// source into ONE rail, and counts a rail's channels over the whole index,
+// so declaring generously is right: a country this source has one channel
+// in is still a rail once other sources add theirs, and a rail that stays
+// too small is simply not offered.
+// -------------------------------------------------------------------------
+/** Which part of the world a country is in, for the "Countries" groups. */
+const CONTINENTS = [
+    ["Asia", "AF AM AZ BD BH BN BT CN CY GE HK ID IL IN IQ IR JO JP KG KH KP KR KW KZ LA LB LK MM MN MO MV MY NP OM PH PK PS QA SA SG SY TH TJ TL TM TR TW UZ VN YE AE"],
+    ["Europe", "AD AL AT BA BE BG BY CH CZ DE DK EE ES FI FO FR GB UK GI GR HR HU IE IS IT LI LT LU LV MC MD ME MK MT NL NO PL PT RO RS RU SE SI SK SM UA VA XK"],
+    ["Africa", "AO BF BI BJ BW CD CF CG CI CM CV DJ DZ EG EH ER ET GA GH GM GN GQ GW KE KM LR LS LY MA MG ML MR MU MW MZ NA NE NG RW SC SD SL SN SO SS ST SZ TD TG TN TZ UG ZA ZM ZW RE"],
+    ["North America", "US CA MX GL BM"],
+    ["Latin America & Caribbean", "AG AI AR AW BB BO BQ BR BS BZ CL CO CR CU CW DM DO EC GD GT GY HN HT JM KN KY LC NI PA PE PR PY SR SV SX TC TT UY VC VE VG VI MQ GP GF"],
+    ["Oceania", "AS AU CK FJ FM GU KI MH MP NC NF NR NU NZ PF PG PN PW SB TK TO TV VU WF WS"]
+];
+function continentName(code) {
+    return CONTINENTS.find(([, codes]) => codes.split(" ").includes(code.toUpperCase()))?.[0] || "Elsewhere";
+}
+function languageTitle(code) {
+    try {
+        const name = new Intl.DisplayNames(["en"], { type: "language" }).of(code);
+        return name && name !== code ? name : code.toUpperCase();
+    }
+    catch {
+        return code.toUpperCase();
+    }
+}
+/** Words the host's own genre rails (News, Sports, Movies ...) already carry under the same name. */
+const GENRE_NAMES = new Set([
+    "news", "sports", "movies", "kids", "music", "documentary", "lifestyle", "business", "entertainment", "general"
+]);
+/** Never offered as a rail: shopping and adult shelves. */
+const UNLISTED = /\b(shop\w*|xxx|adult|erotic\w*|sinnlich\w*|telesales|18\+)\b/i;
+function railsFor(channels, sourceId, sourceName, wanted = { countries: true, languages: true, categories: true }) {
+    const rails = [];
+    const perCountry = new Map();
+    const perLanguage = new Map();
+    const perWord = new Map();
+    for (const channel of channels) {
+        if (channel.country) {
+            const entry = perCountry.get(channel.country) || { n: 0, names: new Map() };
+            entry.n += 1;
+            if (channel.countryName)
+                entry.names.set(channel.countryName, (entry.names.get(channel.countryName) || 0) + 1);
+            perCountry.set(channel.country, entry);
+        }
+        for (const code of new Set(channel.languages))
+            perLanguage.set(code, (perLanguage.get(code) || 0) + 1);
+        for (const word of new Set(channel.categories))
+            perWord.set(word, (perWord.get(word) || 0) + 1);
+    }
+    function byCount(a, b, size) {
+        return size(b[1]) - size(a[1]) || a[0].localeCompare(b[0]);
+    }
+    if (wanted.countries) {
+        for (const [code, entry] of [...perCountry.entries()].sort((a, b) => byCount(a, b, (v) => v.n))) {
+            const name = [...entry.names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+            if (!name || !/^[A-Za-z]{2,3}$/.test(code))
+                continue;
+            rails.push({
+                id: `country-${code.toLowerCase()}`,
+                heading: `Top channels in ${name}`,
+                by: "Most widely carried",
+                group: `Countries/${continentName(code)}`,
+                channelIds: [],
+                filter: { countries: [code] }
+            });
+        }
+    }
+    if (wanted.languages) {
+        for (const [code] of [...perLanguage.entries()].sort((a, b) => byCount(a, b, (v) => v))) {
+            if (!/^[a-z]{2,3}$/.test(code))
+                continue;
+            const name = languageTitle(code);
+            rails.push({
+                id: `language-${code}-home`,
+                heading: `${name} channels`,
+                by: "In your first country",
+                group: "Languages/In your first country",
+                channelIds: [],
+                filter: { languages: [code], market: "first" }
+            });
+            rails.push({
+                id: `language-${code}`,
+                heading: `${name} channels worldwide`,
+                by: "Your countries first",
+                group: "Languages/Worldwide",
+                channelIds: [],
+                filter: { languages: [code], market: "home-first" }
+            });
+        }
+    }
+    if (wanted.categories) {
+        const taken = new Set();
+        let added = 0;
+        for (const [word, count] of [...perWord.entries()].sort((a, b) => byCount(a, b, (v) => v))) {
+            const slug = `cat-${word.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`.slice(0, 40).replace(/-+$/, "");
+            if (count < 3 || word.length > 40 || GENRE_NAMES.has(word) || UNLISTED.test(word) || slug === "cat" || taken.has(slug))
+                continue;
+            taken.add(slug);
+            rails.push({
+                id: slug,
+                heading: word.replace(/(^|[\s(+&/-])(\p{L})/gu, (_all, lead, first) => lead + first.toUpperCase()).replace(/\bTv\b/g, "TV"),
+                by: "Its own category",
+                group: "Categories",
+                channelIds: [],
+                filter: { categories: [word] }
+            });
+            added += 1;
+            if (added >= 60)
+                break;
+        }
+    }
+    if (channels.length >= 4) {
+        rails.push({
+            id: "source",
+            heading: `All of ${sourceName}`,
+            by: "Every channel it carries",
+            group: "Sources",
+            channelIds: [],
+            filter: { sources: [sourceId] }
+        });
+    }
+    return rails;
 }
 export const vavooScraper = {
     id: SCRAPER_ID,
     name: "vavoo.to (+ kool/huhu/oha)",
-    version: "1.0.0",
+    version: "1.1.0",
     build
 };
 // -------------------------------------------------------------------------

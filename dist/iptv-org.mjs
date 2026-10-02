@@ -158,9 +158,9 @@ const GENRES = [
  *  "family"; a Kids rail that reads only "kids" misses most of what a
  *  child would watch. */
 const KIDS = ["kids", "animation", "family"];
-/** Below these a rail is not worth a heading. */
-const MIN_COUNTRY = 4;
-const MIN_LANGUAGE = 6;
+/** The host counts a rail over every source and drops the ones that stay small; these only keep a source from declaring nothing. */
+const MIN_COUNTRY = 1;
+const MIN_LANGUAGE = 1;
 const MIN_KIDS = 4;
 /** The languages the starting For you page has a rail for, in this order. */
 const FOR_YOU = ["hin", "mal", "tam", "tel"];
@@ -257,6 +257,47 @@ function layoutFor(channels, countries) {
             filter: { categories: KIDS, languages: [code], market: "home-first" }
         });
     }
+    /*
+        A KIND OF CHANNEL IN A PLACE, AND IN A LANGUAGE: "News in India",
+        "Hindi Movies". Only for the places and languages with enough
+        channels to have something in each kind; the host counts every
+        combination over the whole index and does not offer the ones that
+        come up small.
+    */
+    const COMBO_GENRES = GENRES.filter(([id]) => id !== "general");
+    const COMBO_COUNTRY = 80;
+    const COMBO_LANGUAGE = 60;
+    for (const [code, count] of [...perCountry.entries()].sort(byName)) {
+        const name = countries.get(code)?.name;
+        if (count < COMBO_COUNTRY || !name || !/^[A-Za-z]{2,3}$/.test(code))
+            continue;
+        for (const [id, label] of COMBO_GENRES) {
+            rails.push({
+                id: `country-${code.toLowerCase()}-${id}`,
+                heading: `${label} in ${name}`,
+                by: "Most widely carried",
+                group: `Countries/${continentName(code)}/${name}`,
+                channelIds: [],
+                filter: { countries: [code], genres: [id] }
+            });
+        }
+    }
+    for (const [code, count] of [...perLanguage.entries()].sort(byName)) {
+        if (count < COMBO_LANGUAGE || !/^[a-z]{2,3}$/.test(code))
+            continue;
+        const name = languageName(code);
+        for (const [id, label] of COMBO_GENRES) {
+            rails.push({
+                id: `language-${code}-${id}`,
+                heading: `${name} ${label}`,
+                by: "Your countries first",
+                group: `Languages/${name}`,
+                channelIds: [],
+                filter: { languages: [code], genres: [id], market: "home-first" }
+            });
+        }
+    }
+    rails.push(...railsFor(channels, "iptv-org", "iptv-org"));
     const have = new Set(rails.map((rail) => rail.id));
     const pick = (ids, rows) => ids.filter((id) => have.has(id)).map((id) => ({ id, rows }));
     /*
@@ -273,10 +314,111 @@ function layoutFor(channels, countries) {
     ];
     return { rails, pages };
 }
+// -------------------------------------------------------------------------
+// Category words and "everything on this source", declared like every other source does.
+// -------------------------------------------------------------------------
+/** Words the host's own genre rails (News, Sports, Movies ...) already carry under the same name. */
+const GENRE_NAMES = new Set([
+    "news", "sports", "movies", "kids", "music", "documentary", "lifestyle", "business", "entertainment", "general"
+]);
+/** Never offered as a rail: shopping and adult shelves. */
+const UNLISTED = /\b(shop\w*|xxx|adult|erotic\w*|sinnlich\w*|telesales|18\+)\b/i;
+function railsFor(channels, sourceId, sourceName, wanted = { countries: false, languages: false, categories: true }) {
+    const rails = [];
+    const perCountry = new Map();
+    const perLanguage = new Map();
+    const perWord = new Map();
+    for (const channel of channels) {
+        if (channel.country) {
+            const entry = perCountry.get(channel.country) || { n: 0, names: new Map() };
+            entry.n += 1;
+            if (channel.countryName)
+                entry.names.set(channel.countryName, (entry.names.get(channel.countryName) || 0) + 1);
+            perCountry.set(channel.country, entry);
+        }
+        for (const code of new Set(channel.languages))
+            perLanguage.set(code, (perLanguage.get(code) || 0) + 1);
+        for (const word of new Set(channel.categories))
+            perWord.set(word, (perWord.get(word) || 0) + 1);
+    }
+    function byCount(a, b, size) {
+        return size(b[1]) - size(a[1]) || a[0].localeCompare(b[0]);
+    }
+    if (wanted.countries) {
+        for (const [code, entry] of [...perCountry.entries()].sort((a, b) => byCount(a, b, (v) => v.n))) {
+            const name = [...entry.names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+            if (!name || !/^[A-Za-z]{2,3}$/.test(code))
+                continue;
+            rails.push({
+                id: `country-${code.toLowerCase()}`,
+                heading: `Top channels in ${name}`,
+                by: "Most widely carried",
+                group: `Countries/${continentName(code)}`,
+                channelIds: [],
+                filter: { countries: [code] }
+            });
+        }
+    }
+    if (wanted.languages) {
+        for (const [code] of [...perLanguage.entries()].sort((a, b) => byCount(a, b, (v) => v))) {
+            if (!/^[a-z]{2,3}$/.test(code))
+                continue;
+            const name = languageName(code);
+            rails.push({
+                id: `language-${code}-home`,
+                heading: `${name} channels`,
+                by: "In your first country",
+                group: "Languages/In your first country",
+                channelIds: [],
+                filter: { languages: [code], market: "first" }
+            });
+            rails.push({
+                id: `language-${code}`,
+                heading: `${name} channels worldwide`,
+                by: "Your countries first",
+                group: "Languages/Worldwide",
+                channelIds: [],
+                filter: { languages: [code], market: "home-first" }
+            });
+        }
+    }
+    if (wanted.categories) {
+        const taken = new Set();
+        let added = 0;
+        for (const [word, count] of [...perWord.entries()].sort((a, b) => byCount(a, b, (v) => v))) {
+            const slug = `cat-${word.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`.slice(0, 40).replace(/-+$/, "");
+            if (count < 3 || word.length > 40 || GENRE_NAMES.has(word) || UNLISTED.test(word) || slug === "cat" || taken.has(slug))
+                continue;
+            taken.add(slug);
+            rails.push({
+                id: slug,
+                heading: word.replace(/(^|[\s(+&/-])(\p{L})/gu, (_all, lead, first) => lead + first.toUpperCase()).replace(/\bTv\b/g, "TV"),
+                by: "Its own category",
+                group: "Categories",
+                channelIds: [],
+                filter: { categories: [word] }
+            });
+            added += 1;
+            if (added >= 60)
+                break;
+        }
+    }
+    if (channels.length >= 4) {
+        rails.push({
+            id: "source",
+            heading: `All of ${sourceName}`,
+            by: "Every channel it carries",
+            group: "Sources",
+            channelIds: [],
+            filter: { sources: [sourceId] }
+        });
+    }
+    return rails;
+}
 export const iptvOrgScraper = {
     id: "iptv-org",
     name: "iptv-org",
-    version: "1.2.0",
+    version: "1.3.0",
     build
 };
 // -------------------------------------------------------------------------
