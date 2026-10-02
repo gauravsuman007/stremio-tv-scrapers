@@ -450,6 +450,23 @@ is worth recognising *before* spending a research session on:
   that resolves cleanly in research returns nothing once actually
   deployed, suspect this before suspecting the algorithm.
 
+### Stream resolvers: for an address that cannot be written down ahead of time
+
+If a source's playable URL is signed and expires, is bound to the caller, or
+comes out of a handshake that must be repeated, do not resolve it in
+`build()`. Give each stream a stable HANDLE as its `url`
+(`https://<scraper id>.invalid/<key>`), set `resolver: "<name>"`, and export
+`resolvers: { <name>: async (handle) => ({ url, referrer?, userAgent? }) }`.
+The host calls it whenever it checks, probes or plays the channel, and never
+fetches the handle itself (see `AGENTS.md` in stremio-tv's Live TV repo,
+"A stream can be a handle"). `zlive.mts` is the worked example: it also
+shows why a resolver should look at WHAT the address serves -- zlive answers
+an outdated handshake with a looping decoy video instead of an error, which
+passes every "is it a playlist / does it serve bytes" check.
+
+Needs Live TV plugin 1.6.0; an older one drops resolver streams rather than
+offering a handle.
+
 ### Segment decoders: the one ongoing transform the contract CAN carry
 
 Since stremio-tv plugin API 1.2.0 / Live TV plugin 1.6.0, a stream may name

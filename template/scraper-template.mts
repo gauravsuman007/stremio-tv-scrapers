@@ -141,6 +141,25 @@ interface ScrapedStream {
      * than handing a player a picture.
      */
     decoder?: string;
+    /**
+     * OPTIONAL. The name of an entry in this scraper's own `resolvers`
+     * (see `Scraper.resolvers`) that turns this stream's `url` into a
+     * playable one AT THE MOMENT IT IS NEEDED. Leave it out for an ordinary
+     * stream -- nearly all of them.
+     *
+     * For a source whose playable address cannot be written down ahead of
+     * time: it is signed and expires, is bound to the caller, or is minted
+     * by a handshake that must be repeated. Resolved once at scrape time
+     * such a URL is stale by the time anyone presses Play.
+     *
+     * With a resolver, `url` is a HANDLE: any stable, unique URL naming the
+     * stream (convention: `https://<scraper id>.invalid/<key>` -- a host
+     * that never resolves, so a handle that escaped fails cleanly). It is
+     * what the host stores evidence against and ranks by, and it is NEVER
+     * fetched. The host calls the resolver for every check, probe and play
+     * and fetches what it returns. A NAME, because the catalogue is JSON.
+     */
+    resolver?: string;
 }
 
 /**
@@ -153,6 +172,20 @@ interface ScrapedStream {
  * it pure computation over the bytes: no network, no state between calls.
  * `node:zlib` and `node:crypto` cover what this usually takes.
  */
+/** What a resolver returns: the real address, plus the headers it needs if
+ *  they differ from the stream's own. `null` (or a throw) means "cannot be
+ *  resolved right now": a dead mirror, tried again on the next press. The
+ *  host reuses an answer for about five minutes and gives a resolver about
+ *  twelve seconds -- it is on the way to a press of Play. */
+interface ResolvedStream {
+    url: string;
+    referrer?: string;
+    userAgent?: string;
+}
+
+/** `handle` is the stream's own `url`. */
+type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
+
 type SegmentDecoder = (segment: Uint8Array, url: string) => Uint8Array | Promise<Uint8Array>;
 
 interface ScrapedChannel {
@@ -394,6 +427,9 @@ interface Scraper {
     /** OPTIONAL. Named segment decoders, referenced by
      *  `ScrapedStream.decoder`. See `SegmentDecoder` above. */
     decoders?: Record<string, SegmentDecoder>;
+    /** OPTIONAL. Named stream resolvers, referenced by
+     *  `ScrapedStream.resolver`. See `StreamResolver` above. */
+    resolvers?: Record<string, StreamResolver>;
     build(): Promise<ScrapedCatalogue>;
 }
 

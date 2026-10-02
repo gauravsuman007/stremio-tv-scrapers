@@ -83,6 +83,8 @@
  * sources may be configured as direct links with no resolve step).
  */
 
+import { gunzipSync, inflateSync } from "node:zlib";
+
 // -------------------------------------------------------------------------
 // Shapes, copied from `src/scraper-types.ts` -- see docs/scraper-template.ts.
 // -------------------------------------------------------------------------
@@ -94,6 +96,7 @@ interface ScrapedStream {
     referrer: string;
     userAgent: string;
     resolver?: string;
+    decoder?: string;
 }
 
 interface ResolvedStream {
@@ -164,6 +167,7 @@ interface Scraper {
     configSchema?: ScraperConfigField[];
     tasks?: ScraperTask[];
     resolvers?: Record<string, StreamResolver>;
+    decoders?: Record<string, (segment: Uint8Array, url: string) => Uint8Array | Promise<Uint8Array>>;
     build(): Promise<ScrapedCatalogue>;
 }
 
@@ -509,6 +513,7 @@ async function fetchChannels(): Promise<ScrapedChannel[]> {
                     labels: entry.tagline ? [entry.tagline] : [],
                     referrer: REFERRER,
                     userAgent: USER_AGENT,
+                    decoder: DECODER,
                     ...(direct ? {} : { resolver: "zlive" })
                 }
             ]
@@ -605,6 +610,7 @@ async function buildEventsRail(): Promise<{ channels: ScrapedChannel[]; rails: S
                     labels: entry.tagline ? [entry.tagline] : ["Live event"],
                     referrer: REFERRER,
                     userAgent: USER_AGENT,
+                    decoder: DECODER,
                     ...(direct ? {} : { resolver: "zlive" })
                 }
             ]
@@ -810,11 +816,212 @@ function railsFor(channels: ScrapedChannel[], sourceId: string, sourceName: stri
     return rails;
 }
 
+// --- the segment decoder -----------------------------------------------------------
+
+const TPIX = [84, 73, 75, 84, 73, 75, 80, 88]; // "TIKTIKPX"
+const TRAW = [84, 73, 75, 84, 73, 75, 82, 65, 87]; // "TIKTIKRAW"
+const TSGZ = [84, 73, 75, 84, 73, 75, 84, 83, 71, 90]; // "TIKTIKTSGZ"
+
+function isTs(bytes: Uint8Array, at = 0): boolean {
+    return bytes[at] === 0x47 && (at + 188 >= bytes.length || bytes[at + 188] === 0x47);
+}
+
+function find(bytes: Uint8Array, tag: number[]): number {
+    outer: for (let i = 0; i + tag.length < bytes.length; i++) {
+        for (let j = 0; j < tag.length; j++) if (bytes[i + j] !== tag[j]) continue outer;
+        return i;
+    }
+    return -1;
+}
+
+function paeth(a: number, b: number, c: number): number {
+    const p = a + b - c;
+    const pa = Math.abs(p - a);
+    const pb = Math.abs(p - b);
+    const pc = Math.abs(p - c);
+    if (pa <= pb && pa <= pc) return a;
+    return pb <= pc ? b : c;
+}
+
+/** PNG -> its pixels as packed RGB, or null for any PNG this cannot be
+ *  (not 8-bit, interlaced, not RGB/RGBA). */
+function pngRgb(bytes: Uint8Array): Uint8Array | null {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let off = 8;
+    let width = 0;
+    let height = 0;
+    let depth = 0;
+    let colour = 0;
+    let interlace = 0;
+    const idat: Uint8Array[] = [];
+
+    while (off + 8 <= bytes.length) {
+        const len = view.getUint32(off);
+        if (len > bytes.length - off - 12) return null;
+        const type = String.fromCharCode(bytes[off + 4]!, bytes[off + 5]!, bytes[off + 6]!, bytes[off + 7]!);
+        const data = bytes.subarray(off + 8, off + 8 + len);
+        if (type === "IHDR") {
+            width = view.getUint32(off + 8);
+            height = view.getUint32(off + 12);
+            depth = data[8]!;
+            colour = data[9]!;
+            interlace = data[12]!;
+        } else if (type === "IDAT") {
+            idat.push(data);
+        } else if (type === "IEND") {
+            break;
+        }
+        off += 12 + len;
+    }
+
+    if (!width || !height || depth !== 8 || interlace || (colour !== 2 && colour !== 6)) return null;
+
+    const raw = inflateSync(Buffer.concat(idat));
+    const bpp = colour === 6 ? 4 : 3;
+    const stride = width * bpp;
+    const rgb = new Uint8Array(width * height * 3);
+    let src = 0;
+    let dst = 0;
+    let prev = new Uint8Array(stride);
+
+    for (let y = 0; y < height; y++) {
+        if (src + 1 + stride > raw.length) return null;
+        const filter = raw[src++]!;
+        const row = raw.subarray(src, src + stride);
+        src += stride;
+        const out = new Uint8Array(stride);
+        for (let i = 0; i < stride; i++) {
+            const a = i >= bpp ? out[i - bpp]! : 0;
+            const b = prev[i]!;
+            const c = i >= bpp ? prev[i - bpp]! : 0;
+            let v = row[i]!;
+            if (filter === 1) v += a;
+            else if (filter === 2) v += b;
+            else if (filter === 3) v += (a + b) >> 1;
+            else if (filter === 4) v += paeth(a, b, c);
+            else if (filter !== 0) return null;
+            out[i] = v & 255;
+        }
+        if (colour === 2) {
+            rgb.set(out, dst);
+            dst += stride;
+        } else {
+            for (let i = 0; i < stride; i += 4) {
+                rgb[dst++] = out[i]!;
+                rgb[dst++] = out[i + 1]!;
+                rgb[dst++] = out[i + 2]!;
+            }
+        }
+        prev = out;
+    }
+
+    return rgb;
+}
+
+/** The newest layout: TS gzipped into the pixels, behind "TIKTIKPX". */
+function fromPixels(bytes: Uint8Array): Uint8Array | null {
+    const rgb = pngRgb(bytes);
+    if (!rgb || rgb.length < 12) return null;
+    for (let k = 0; k < TPIX.length; k++) if (rgb[k] !== TPIX[k]) return null;
+    const size = new DataView(rgb.buffer, rgb.byteOffset + 8, 4).getUint32(0);
+    if (size <= 0 || 12 + size > rgb.length) return null;
+    const ts = gunzipSync(rgb.subarray(12, 12 + size));
+    return isTs(ts) ? new Uint8Array(ts.buffer, ts.byteOffset, ts.byteLength) : null;
+}
+
+/** An older layout: TS appended after the PNG's IEND chunk. */
+function afterIend(bytes: Uint8Array): Uint8Array | null {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let off = 8;
+    while (off + 8 <= bytes.length) {
+        const len = view.getUint32(off);
+        if (len > bytes.length - off - 12) return null;
+        const type = String.fromCharCode(bytes[off + 4]!, bytes[off + 5]!, bytes[off + 6]!, bytes[off + 7]!);
+        off += 12 + len;
+        if (type === "IEND") return off < bytes.length && isTs(bytes, off) ? bytes.subarray(off) : null;
+    }
+    return null;
+}
+
+/** An older layout still: TS in a WebP's EXIF chunk. */
+function webpExif(bytes: Uint8Array): Uint8Array | null {
+    const ascii = (at: number, n: number): string => String.fromCharCode(...bytes.subarray(at, at + n));
+    if (bytes.length < 16 || ascii(0, 4) !== "RIFF" || ascii(8, 4) !== "WEBP") return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let off = 12;
+    while (off + 8 <= bytes.length) {
+        const tag = ascii(off, 4);
+        const n = view.getUint32(off + 4, true);
+        off += 8;
+        if (off + n > bytes.length) return null;
+        if (tag === "EXIF") {
+            const data = bytes.subarray(off, off + n);
+            return data.length > 188 && isTs(data) ? data : null;
+        }
+        off += n + (n & 1);
+    }
+    return null;
+}
+
+/** Exported for the standalone check below; the plugin calls it through
+ *  `decoders.tiktikpx`. */
+function unwrapSegment(bytes: Uint8Array): Uint8Array {
+    if (isTs(bytes)) return bytes;
+
+    const webp = webpExif(bytes);
+    if (webp) return webp;
+
+    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50) {
+        const tail = afterIend(bytes);
+        if (tail) return tail;
+        const pixels = fromPixels(bytes);
+        if (pixels) return pixels;
+        throw new Error("zlive: PNG segment with no TS payload");
+    }
+
+    const raw = find(bytes, TRAW);
+    if (raw >= 0 && isTs(bytes, raw + TRAW.length)) return bytes.subarray(raw + TRAW.length);
+
+    const gz = find(bytes, TSGZ);
+    if (gz >= 0) {
+        const ts = gunzipSync(bytes.subarray(gz + TSGZ.length));
+        return new Uint8Array(ts.buffer, ts.byteOffset, ts.byteLength);
+    }
+
+    for (let i = 0; i + 188 < bytes.length; i++) if (isTs(bytes, i)) return bytes.subarray(i);
+
+    throw new Error("zlive: segment with no TS payload");
+}
+
+
+/**
+ * zlive's "Primary" and "IPTV" upstreams are the dlhd backend: each segment
+ * is a PNG with the MPEG-TS packed into its pixels (measured Oct 2026: CNN
+ * USA's segments begin `89 50 4E 47`, and dlhd's `unwrapSegment`, copied
+ * above, turns them into sync-byte-clean TS). Other upstreams serve plain
+ * TS, which passes straight through. Anything under a kilobyte is a key or a
+ * tiny init map and is never wrapped, so it is returned as it came.
+ */
+const DECODER = "tiktikpx";
+
 export const zliveScraper: Scraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
     version: "1.4.0",
     resolvers: { zlive: resolveHandle },
+    decoders: {
+        [DECODER]: (segment) => {
+            if (segment.length < 1024) return segment;
+
+            // A segment in none of the disguises (fragmented MP4, say) is
+            // handed on as it is rather than turned into an error.
+            try {
+                return unwrapSegment(segment);
+            } catch {
+                return segment;
+            }
+        }
+    },
     build
 };
 
