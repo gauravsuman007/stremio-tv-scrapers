@@ -120,7 +120,7 @@ async function fetchEvents() {
         throw new Error("futbolx: every category file failed");
     return {
         channels,
-        rails: channels.length ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id) }] : []
+        rails: channels.length ? [{ id: "live-events", heading: "Live Events", channelIds: channels.map((c) => c.id), group: "Live events" }] : []
     };
 }
 const configSchema = [
@@ -175,7 +175,7 @@ function build() {
 export const futbolxScraper = {
     id: SCRAPER_ID,
     name: "Futbol-X",
-    version: "1.0.0",
+    version: "1.0.1",
     configSchema,
     tasks,
     build

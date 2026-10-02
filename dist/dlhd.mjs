@@ -596,13 +596,13 @@ async function build() {
     });
     return {
         channels: [...channels, ...events],
-        rails: events.length ? [{ id: "live-events", heading: "Live Events", channelIds: events.map((e) => e.id) }] : []
+        rails: events.length ? [{ id: "live-events", heading: "Live Events", channelIds: events.map((e) => e.id), group: "Live events" }] : []
     };
 }
 export const dlhdScraper = {
     id: SCRAPER_ID,
     name: "DaddyLive",
-    version: "1.0.0",
+    version: "1.0.1",
     configSchema,
     tasks,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },

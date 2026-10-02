@@ -123,12 +123,160 @@ async function build() {
             streams
         });
     }
-    return { channels: out };
+    return { channels: out, ...layoutFor(out, named) };
+}
+/*
+    THE RAILS, AND THE PAGES THAT START WITH THEM.
+
+    Every rail the Live TV app can show comes from here or from another
+    source; the app itself names no genre, country or language. They are
+    DESCRIBED (`filter`) rather than listed, so the app fills each one from
+    the finished index -- ranked by what last night's check proved, across
+    every source at once, and for the household that is looking
+    (`market`) -- instead of this scraper freezing a list of ids that goes
+    stale the day a channel stops playing.
+
+    Which rails exist is read from the data: a country appears when it has
+    channels, a language when enough of them speak it. A rail that would
+    hold two cards reads as a broken rail, so each kind has a floor.
+*/
+/** The host's own genre ids (taxonomy.ts there), with how each is titled. */
+const GENRES = [
+    ["news", "News"],
+    ["entertainment", "Entertainment"],
+    ["movies", "Movies"],
+    ["sports", "Sports"],
+    ["kids", "Kids"],
+    ["music", "Music"],
+    ["documentary", "Documentary"],
+    ["lifestyle", "Lifestyle"],
+    ["business", "Business"],
+    ["devotional", "Devotional"],
+    ["general", "General"]
+];
+/** iptv-org files cartoons under "animation" and family channels under
+ *  "family"; a Kids rail that reads only "kids" misses most of what a
+ *  child would watch. */
+const KIDS = ["kids", "animation", "family"];
+/** Below these a rail is not worth a heading. */
+const MIN_COUNTRY = 4;
+const MIN_LANGUAGE = 6;
+const MIN_KIDS = 4;
+/** The languages the starting For you page has a rail for, in this order. */
+const FOR_YOU = ["hin", "mal", "tam", "tel"];
+/** Which part of the world a country is in, for the "Countries" groups. */
+const CONTINENTS = [
+    ["Asia", "asia", "AF AM AZ BD BH BN BT CN CY GE HK ID IL IN IQ IR JO JP KG KH KP KR KW KZ LA LB LK MM MN MO MV MY NP OM PH PK PS QA SA SG SY TH TJ TL TM TR TW UZ VN YE AE"],
+    ["Europe", "europe", "AD AL AT BA BE BG BY CH CZ DE DK EE ES FI FO FR GB UK GI GR HR HU IE IS IT LI LT LU LV MC MD ME MK MT NL NO PL PT RO RS RU SE SI SK SM UA VA XK"],
+    ["Africa", "africa", "AO BF BI BJ BW CD CF CG CI CM CV DJ DZ EG EH ER ET GA GH GM GN GQ GW KE KM LR LS LY MA MG ML MR MU MW MZ NA NE NG RW SC SD SL SN SO SS ST SZ TD TG TN TZ UG ZA ZM ZW RE"],
+    ["North America", "north-america", "US CA MX GL BM"],
+    ["Latin America & Caribbean", "latin-america", "AG AI AR AW BB BO BQ BR BS BZ CL CO CR CU CW DM DO EC GD GT GY HN HT JM KN KY LC NI PA PE PR PY SR SV SX TC TT UY VC VE VG VI MQ GP GF"],
+    ["Oceania", "oceania", "AS AU CK FJ FM GU KI MH MP NC NF NR NU NZ PF PG PN PW SB TK TO TV VU WF WS"]
+];
+function continentName(code) {
+    return CONTINENTS.find(([, , codes]) => codes.split(" ").includes(code.toUpperCase()))?.[0] || "Elsewhere";
+}
+function languageName(code) {
+    try {
+        const name = new Intl.DisplayNames(["en"], { type: "language" }).of(code);
+        return name && name !== code ? name : code.toUpperCase();
+    }
+    catch {
+        return code.toUpperCase();
+    }
+}
+function layoutFor(channels, countries) {
+    const perCountry = new Map();
+    const perLanguage = new Map();
+    const kidsPerLanguage = new Map();
+    for (const channel of channels) {
+        if (channel.country)
+            perCountry.set(channel.country, (perCountry.get(channel.country) || 0) + 1);
+        const kids = channel.categories.some((category) => KIDS.includes(category));
+        for (const code of channel.languages) {
+            perLanguage.set(code, (perLanguage.get(code) || 0) + 1);
+            if (kids)
+                kidsPerLanguage.set(code, (kidsPerLanguage.get(code) || 0) + 1);
+        }
+    }
+    const rails = [];
+    for (const [id, heading] of GENRES) {
+        rails.push({
+            id: `genre-${id}`,
+            heading,
+            by: "Your countries first",
+            group: "Genres",
+            channelIds: [],
+            filter: { genres: [id], market: "home-first" }
+        });
+    }
+    const byName = (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]);
+    for (const [code, count] of [...perCountry.entries()].sort(byName)) {
+        const name = countries.get(code)?.name;
+        if (count < MIN_COUNTRY || !name || !/^[A-Za-z]{2,3}$/.test(code))
+            continue;
+        rails.push({
+            id: `country-${code.toLowerCase()}`,
+            heading: `Top channels in ${name}`,
+            by: "Most widely carried",
+            group: `Countries/${continentName(code)}`,
+            channelIds: [],
+            filter: { countries: [code] }
+        });
+    }
+    for (const [code, count] of [...perLanguage.entries()].sort(byName)) {
+        if (count < MIN_LANGUAGE || !/^[a-z]{2,3}$/.test(code))
+            continue;
+        const name = languageName(code);
+        rails.push({
+            id: `language-${code}-home`,
+            heading: `${name} channels`,
+            by: "In your first country",
+            group: "Languages/In your first country",
+            channelIds: [],
+            filter: { languages: [code], market: "first" }
+        });
+        rails.push({
+            id: `language-${code}`,
+            heading: `${name} channels worldwide`,
+            by: "Your countries first",
+            group: "Languages/Worldwide",
+            channelIds: [],
+            filter: { languages: [code], market: "home-first" }
+        });
+    }
+    for (const [code, count] of [...kidsPerLanguage.entries()].sort(byName)) {
+        if (count < MIN_KIDS || !/^[a-z]{2,3}$/.test(code))
+            continue;
+        rails.push({
+            id: `kids-${code}`,
+            heading: `Kids in ${languageName(code)}`,
+            by: "Your countries first",
+            group: "Kids/By language",
+            channelIds: [],
+            filter: { categories: KIDS, languages: [code], market: "home-first" }
+        });
+    }
+    const have = new Set(rails.map((rail) => rail.id));
+    const pick = (ids, rows) => ids.filter((id) => have.has(id)).map((id) => ({ id, rows }));
+    /*
+        A genre page is one wall of that genre: rows 0, "as many lines as
+        it takes", which is what these pages have always been. The For you
+        page is rails of one line, the way a rail has always scrolled.
+    */
+    const pages = [
+        { id: "foryou", title: "For you", rails: pick(FOR_YOU.map((code) => `language-${code}-home`), 1) },
+        { id: "documentary", title: "Documentary", rails: pick(["genre-documentary"], 0) },
+        { id: "sports", title: "Sports", rails: pick(["genre-sports"], 0) },
+        { id: "kids", title: "Kids", rails: pick(["genre-kids"], 0) },
+        { id: "news", title: "News", rails: pick(["genre-news"], 0) }
+    ];
+    return { rails, pages };
 }
 export const iptvOrgScraper = {
     id: "iptv-org",
     name: "iptv-org",
-    version: "1.0.0",
+    version: "1.2.0",
     build
 };
 // -------------------------------------------------------------------------
@@ -137,7 +285,7 @@ export const iptvOrgScraper = {
 if (import.meta.url === `file://${process.argv[1]}`) {
     build()
         .then((catalogue) => {
-        console.log(`${catalogue.channels.length} channels`);
+        console.log(`${catalogue.channels.length} channels, ${(catalogue.rails || []).length} rails, ${(catalogue.pages || []).length} pages`);
         console.log(catalogue.channels[0] || "(none)");
     })
         .catch((cause) => {

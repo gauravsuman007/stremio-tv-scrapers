@@ -521,7 +521,7 @@ async function buildEventsRail(server = DEFAULT_MATCH_SERVER) {
         return { channels: [], rails: [] };
     return {
         channels: eventChannels.map((e) => e.channel),
-        rails: [{ id: "live-events", heading: "Live Events", channelIds: eventChannels.map((e) => e.channel.id) }]
+        rails: [{ id: "live-events", heading: "Live Events", channelIds: eventChannels.map((e) => e.channel.id), group: "Live events" }]
     };
 }
 // --- entry point -----------------------------------------------------------
@@ -685,7 +685,7 @@ async function build() {
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.4.2",
+    version: "1.4.3",
     configSchema,
     tasks,
     build
