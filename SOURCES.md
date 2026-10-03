@@ -33,8 +33,8 @@ Source: the "Live TV" and "Live Sports" sections of <https://fmhy.net/video>
 client apps, not live sources this repository's `Scraper.build()` contract
 covers.
 
-Totals: implemented 12 (one with a blocked backend), possible 6, untriaged
-~30 (mostly sport-event sites), rejected 35.
+Totals: implemented 15 (one with a blocked backend), possible 6, untriaged
+~29 (mostly sport-event sites), rejected 35.
 
 Method note for whoever continues: the 2026-09-30 pass probed each site in
 headless Chromium with request logging (research only -- see AGENTS.md),
@@ -47,7 +47,7 @@ embed family (obfuscated + fingerprinted CDN), and ntv.st reskins
 `NODE_USE_ENV_PROXY=1` is set -- in a proxied sandbox, an unexplained 403
 from a scraper run may be the proxy, not the site.
 
-## Implemented (13)
+## Implemented (15)
 
 | Site | Note |
 |---|---|
@@ -64,6 +64,8 @@ from a scraper run may be the proxy, not the site.
 | [vipotv](https://vipotv.com/) | `scrapers/vipotv.mts`. WordPress directory; REST API lists posts/country categories, each page's `livetv.work/fireplayer` iframe hash resolves via `?do=getVideo` to a plain m3u8. ~1.2k channels; ~60% of a 25-channel sample weren't in iptv-org. Slow: pages take 5-11s each, so a build is ~16 min. |
 | [Futbol-X](https://www.futbol-x.xyz/) | `scrapers/futbolx.mts`. Sport events from `/api/<category>.json` with direct m3u8s (`Referer` required); hourly task, shared "Live Events" rail. Only 2 upcoming events at implementation time. |
 | [DaddyLive](https://dlhd.st/) (`dlive.sx`; also behind DaddyLiveHD, Watchott Live, TV247US, DamiTV's dlhd half) | `scrapers/dlhd.mts`. ~930 24/7 channels from `/24-7-channels.php` plus today's schedule (~30 events in a window around now) on the shared "Live Events" rail. Every stream is `edge.<host>/premium<id>/index.m3u8` (host learnt from one player page per build). Segments are PNGs with the TS gzipped into the pixels; the scraper ships a `tiktikpx` segment decoder and the Live TV plugin runs it on every segment through its relay. **Needs stremio-tv plugin API 1.2.0 and Live TV plugin 1.6.0**; on anything older these streams are dropped, not offered broken. |
+| [CricHD](https://crichd.at/) | `scrapers/crichd.mts`. Server-rendered cricket listing: the home page's `data-start`/`data-end` say which matches are live, each `/events/<slug>` page is a table of sources (channel, quality, language, `hitsportshdd.xyz/fr.php?src=<embed>`). Each live match is one card on the shared "Live Events" rail and an identical "Live Cricket" rail, with every supported source as a stream; each source is also emitted as a plain channel named the way iptv-org spells it (looked up in its `channels.json` incl. alt names) so it merges as a mirror. Three embed families resolve over plain HTTP, as play-time `resolvers` (signed URLs last ~2.5h): `dembed.top` (the dlhd backend, PNG segments -> `tiktikpx` decoder), `trendy48` (`exmxbxe.cfd`, player config in an XOR-and-shift number array, decoded without eval; same PNG segments) and `streame.center` (Referer-locked; feed was off-air at implementation, segment format unverified). **Not resolvable**: `s1.vertex.st` (-> `lineagest.click`, encrypted config + devtools-hostile bundle, never requested a stream in headless Chromium) and `embed.st` (the Streamed `lock.wasm` family). The "Quality" column was a constant 1500 and "Ads" a constant 3 on every row seen; labels can be wrong (a "Willow" row linking `ch=sonysportsnetwork-in`), hence the slug cross-check. Needs plugin API 1.2.0 / Live TV plugin 1.6.0. |
+| [CricWeb](https://cricweb.vip/) (front for `live.mhdtv.online`) | `scrapers/cricweb.mts`. Cricket + football fixtures (live and next 12h) and a ~25-channel TV grid, read from the home page's `event-card`s and each `live.mhdtv.online/watch/<slug>` page (`data-stream-button`s, or a lone iframe/video). Fixtures go on "Live Events", "Live Cricket" and "Live Football" rails; the card's logo is the home side's flag/crest. The site's `data-status` is stale (Sep 30 fixtures still "live" on Oct 3) and `data-sport="cricket"` is set on football friendlies, so liveness comes from `data-event-ms` + a per-sport window and sport from the league title. Plain sources (`sportzfy24.com/m3u8.php?id=<m3u8>`, `playyyz1.cc/e?hls=<m3u8>`, `hls` buttons) are direct URLs. **Encrypted DASH is delivered as `ScrapedStream.clearKey`** (plugin API 1.6.0; the host decrypts with ffmpeg and serves HLS): `api.sportzf*.com/drm/player.php` pages (JSON constants `MANIFEST_URL`/`DRM_KID`/`DRM_KEY`/`STREAM_HEADERS`) and `dash` buttons with `data-stream-kid/key`. 2026-10-03, through the real host relay: 8 of 18 encrypted streams decoded to video; the rest were off air or 403 (a geo-locked Russian CDN for the Mat4 set). Not playable: `1freecdn.xyz` (P2P loader), `tmaxapp.site` (packed), plusbox, YouTube, keyless `dash`. Many direct hosts (`livetl00x`, `gpcdn.net/bpk-tv`, tapmad's) 403 from the research machine whatever the Referer -- probably geo/IP, offered anyway. Recognised sources are also emitted as channels under iptv-org's spelling (alt names trusted only on sports channels). The "Tapmad" grid page is a hub of unrelated channels (TSN, FOX, ITV, Sky Cricket...) and currently lands them all as mirrors of one "Tapmad" channel; the button labels say which is which. |
 
 ### Formerly backend-blocked
 
@@ -106,7 +108,6 @@ trace; the 2026-09-30 headless pass got as far as the note says.
 | [FSL](https://freestreams-live1h.pk/) | Blob-script loader; no player reached. |
 | [Streami](https://streamic.st/) | Loads `/api/J.php`; not traced. |
 | [FalconStreams](https://falconstreams.app/) | Next.js; no player reached. |
-| [CricHD](https://crichd.at/) | Event pages load only ad scripts headless; player not reached. |
 | [TheTVApp](https://thetvapp.plus/) | `/watch/<league>-streams` listing pages; per-game player not traced. zerostream links `tvpass.org/live/<Channel>/hd`, probably the same family. |
 | [MainPortal66](https://mainportal66.com/) | Links portal; not traced. |
 | [FCTV33](https://www.fctv33hd.co/) | Redirects to `fctv33hd.uno`; calls `apis-data10.tcllu137fien.ru/api/common/params`; not traced. |

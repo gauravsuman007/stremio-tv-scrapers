@@ -160,6 +160,46 @@ interface ScrapedStream {
      * and fetches what it returns. A NAME, because the catalogue is JSON.
      */
     resolver?: string;
+    /**
+     * OPTIONAL. Marks `url` as a DASH manifest (`.mpd`) whose media is
+     * ENCRYPTED with Common Encryption ("cenc", AES-CTR), and gives the
+     * ClearKey that opens it. Leave it out for an ordinary stream.
+     *
+     * For sources that restream a DRM-protected channel and publish the key
+     * beside it (a player page holding `kid:key` for Shaka or dash.js).
+     * A television's browser cannot be handed a key through a URL, so the
+     * HOST does it: ffmpeg opens the manifest with the key, copies the
+     * decrypted video and audio (no re-encode) into ordinary HLS segments,
+     * and the player is served that. To the viewer it is an HLS channel.
+     *
+     * `url` is the real manifest address, not a handle (but a stream with
+     * a `resolver` may have the resolver return `clearKey` instead -- see
+     * `ResolvedStream`). `referrer` and `userAgent` are sent on the manifest
+     * and on every segment, as for any stream. It does not combine with
+     * `decoder`: the host's own output is ordinary video.
+     *
+     * One key pair only: it must open every track the stream carries,
+     * which is what these sources do in practice. A stream whose audio and
+     * video use different keys cannot be expressed and should be left out.
+     * Widevine, PlayReady and FairPlay are not ClearKey and are not
+     * supported by anything here -- do not hand one over.
+     *
+     * Needs stremio-tv plugin API 1.6.0 and an `ffmpeg` on the host; without
+     * both the stream is dropped, not offered broken. The host checks such a
+     * stream as far as its manifest (reachable, really an MPD); whether the
+     * key is right is only found out when someone plays it.
+     */
+    clearKey?: ClearKey;
+}
+
+/**
+ * A ClearKey pair, both 32 hex characters (16 bytes). `key` decrypts;
+ * `kid` is the key id the manifest names and is kept for the record --
+ * the host does not need it to decrypt. See `ScrapedStream.clearKey`.
+ */
+interface ClearKey {
+    kid: string;
+    key: string;
 }
 
 /**
@@ -181,6 +221,10 @@ interface ResolvedStream {
     url: string;
     referrer?: string;
     userAgent?: string;
+    /** The key for a stream that is encrypted (see `ScrapedStream.clearKey`),
+     *  when the resolver is what knows it -- a signed manifest and its key
+     *  often change together. Overrides the stream's own. */
+    clearKey?: ClearKey;
 }
 
 /** `handle` is the stream's own `url`. */
@@ -208,6 +252,18 @@ interface ScrapedChannel {
      *  artwork proxy this surface uses can re-type raster formats but
      *  cannot sniff SVG, so an SVG logo renders as a broken image. */
     logo: string;
+    /**
+     * OPTIONAL. Two pictures for ONE card, drawn side by side on a single
+     * tile -- a fixture's two flags or crests ("India" | "West Indies").
+     * Leave it out for an ordinary channel. When it is present, `logo` must
+     * still be set (to the first picture): a host that predates this field
+     * shows `logo` alone, and a card whose logo is empty is given a name pill.
+     * Direct image URLs, as `logo`; at most the first two are used. The
+     * pair is only drawn when BOTH could be fetched; otherwise the card falls
+     * back to `logo`. When two sources' cards for the same event merge, the
+     * merged card takes `logo` and `logos` from whichever source has them.
+     */
+    logos?: string[];
     website: string;
     network: string;
     /** At least one, or the channel is dropped centrally -- no need to

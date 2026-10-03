@@ -246,6 +246,46 @@ why), or noted as probably sharing a backend `ntvst.mts` or `zlive.mts`
 already resolved or hit a wall on. Update it in the same commit whenever a
 source's status changes -- an agent picking this up next has only this
 file and the scrapers themselves to go on, not this session's chat history.
+Don't retry a rejected source. Several sources are often one catalogue
+behind different fronts (same CDN, same rendition ladder): triage by
+backend, not by front-end count, and note which ones share one.
+
+[STRATEGIES.md](STRATEGIES.md) holds the worked-out *techniques* (what to
+hook, the recurring envelope/gate shapes, how dead ends looked). Read it
+before reverse-engineering anything, and add to it whenever you learn a
+technique or confirm a dead end -- it is the how, SOURCES.md the status.
+
+## Check what a source really serves before building it
+
+A URL that plays in ffmpeg on your laptop can still fail on a television
+or from the host. Before writing a scraper, with exactly the `referrer`
+and `userAgent` you would return, confirm the playlist, a variant and a
+segment all fetch, and that a real decode works:
+
+```bash
+ffmpeg -v error -rw_timeout 15000000 -user_agent "<browser UA>" \
+  -headers "Referer: R\r\n" -f hls -allowed_extensions ALL -extension_picky 0 \
+  -i "<url>" -t 8 -f null -
+```
+
+- **Don't trust file names or content types.** Playlists often have no
+  `.m3u8`, are served as `application/json`/`text/html`, and segments may
+  be named `.jpg` or have no extension while being real video. A strict
+  client (ffmpeg) needs the flags above; a conforming HLS client copes.
+- **A plausible master is not a playable one.** Check a segment: a CDN can
+  list fine and 403 every segment (an ad CDN's `domain forbidden`, a
+  `bad signature`), serve PNG-prefixed segments (a decoder may carry
+  those, see below) or answer an outdated handshake with a looping decoy
+  video. A resolver should look at WHAT the address serves.
+- **A master's first variant is not always the best**, and widescreen
+  streams report heights like 800 or 872, not 1080. Ranking is the host's
+  job -- just don't hand it a link that only works for one rendition.
+- **Tokens expire and IPs matter.** Resolve at play time (a resolver),
+  and remember an address bound to the resolving network (`asn=`, an IP in
+  the token) only plays from where it was resolved -- the host's own
+  situation, so test there when you can.
+- A source that needs something the contract cannot send is `blocked` in
+  SOURCES.md, with the host/contract change it would need.
 
 ## Reverse-engineering a source that isn't plain JSON or HTML
 
@@ -260,6 +300,15 @@ hand-decode an obfuscated bundle line by line.** A modern JS engine
 (Node) can execute almost anything a browser can, given the right stubs;
 finding which globals it actually touches is far less work than reversing
 what a minifier did to the source.
+
+**Before any of that, check the source needs running code at all.** Several
+"browser-only" sources were a JSON API behind a click, or had the stream
+list inlined in the server-rendered page (Next.js flight data, an inline
+`window.x = {...}`). Log the real page's requests and responses first, and
+grep the bundle for the endpoint. See STRATEGIES.md for the order of attack
+and the full technique list (`crypto.subtle` hooks with stack traces,
+`allHeaders()` request logs, Next.js server actions, substitute WASM
+instances, splice tests).
 
 ### Running an obfuscated bundle in Node to recover a crypto/signing scheme
 
@@ -324,12 +373,12 @@ by hand was going to recover it in reasonable time.
    the same answer.
 6. **Port the recovered algorithm into clean, un-obfuscated TypeScript**
    in the shipped scraper -- using Node's real `crypto.webcrypto`
-   directly, not the site's own minified functions. Never ship obfuscated
-   third-party JS, or a `vm`/`jsdom` sandbox, inside a scraper that
-   reaches stremio-tv; those are research-only tools for this repository,
-   the same way `node:vm` is for the web-scraper sibling repository (see
-   its AGENTS.md) -- not a security boundary, and not something a
-   `build()` call should depend on at runtime.
+   directly, not the site's own minified functions. By default, never ship
+   obfuscated third-party JS, or a `vm`/`jsdom` sandbox, inside a scraper
+   that reaches stremio-tv; those are research-only tools -- not a
+   security boundary, and not something a `build()` call should depend on
+   at runtime. The one exception is "Running a site's own code (last
+   resort, with safeguards)" below, which has its own conditions.
 
 ### WASM-gated sources
 
@@ -375,6 +424,27 @@ trying properly before giving up:
   instrument internal functions by redirecting an existing, unused import
   of matching type to a sentinel logger). Never ship a module with
   imports, native or otherwise -- reimplement what it computes.
+- **To see what an export takes and returns, hand the page a substitute
+  instance.** `instance.exports` is frozen, so assigning a wrapper into it
+  silently does nothing. Wrap `WebAssembly.instantiate`/`instantiateStreaming`
+  (Playwright `addInitScript`) and return `{ module, instance: { exports:
+  { ...wrappers } } }`, dumping linear memory at each pointer argument
+  before and after the call.
+- **An import table is not proof a module fingerprints you.** Canvas/
+  navigator/`localStorage` imports often only feed anti-bot checks around a
+  pure key schedule. Run the module in a Node *research* harness (its own
+  glue, stubbed globals, `performance.now()` looking like an old page) until
+  it decrypts once, then recover the algorithm: scan linear memory for the
+  AES key (every aligned 32-byte window against the ciphertext), instrument
+  an internal function (SHA-256 compress, found by its `K[0]` constant) by
+  calling an otherwise-unused import of matching type with a sentinel --
+  no function index shifts. Rebuild it natively; don't ship a module
+  with imports.
+- **Isolate missing dependencies one at a time**: if the glue calls
+  `libsodium`/`crypto.subtle`/a hash, install the Node equivalent rather
+  than polyfilling browser globals generically.
+- Record the last attempt's date next to a dead end; a source blocked on
+  "needs a browser for WASM" is worth retrying when its bundle changes.
 - **When it genuinely can't run standalone** -- it fingerprints its
   environment, needs a real event loop tied to page lifecycle, or checks
   its output against something only the live page can supply -- there is
@@ -382,6 +452,52 @@ trying properly before giving up:
   `ntvst.mts` skips `dlhd` channels) and document exactly what was tried
   and why it didn't work, in the scraper's own docstring, so the next
   attempt doesn't repeat the dead end.
+
+### Running a site's own code (last resort, with safeguards)
+
+Some players seal requests inside a bytecode VM whose key, base path and
+CSRF token are constants of one deploy, held only in that bytecode.
+Copying one deploy's constants breaks on the next release, and a native
+interpreter for a purpose-built VM is not worth writing. For such a
+source -- and only after the native routes above (zero-import `.wasm`,
+reimplementing the algorithm, a plain JSON API) are shown not to work -- a
+scraper may download the site's player code at resolve time and execute
+it in a `node:vm` context. The sibling VOD repository's maintainer
+accepted this on 2026-10-01 for vidfast (`src/vidfast.mts` there is the
+worked example); here, still ask the maintainer before the first
+scraper that does it. The rules:
+
+- **`vm` is not a security boundary.** It limits what a rotated bundle can
+  reach by accident; it does not contain hostile code. Run only the code
+  of the site you are already scraping, never code from a third party it
+  loads, and say so in the engine's header comment.
+- **Fetch narrowly.** Same-origin scripts of the one site only, a count cap
+  and a byte cap per script; refuse everything else. Run each with a
+  `timeout`.
+- **Whitelist the sandbox.** Build the context from an explicit list of
+  host globals (text/URL/timer/crypto basics); never expose `process`,
+  `require`, `module`, `fs`, the real `console`, or a main-realm object
+  that hands its `Function` constructor to the code. The sandbox's
+  `fetch` resolves against the site's origin and **rejects every other
+  host**.
+- **Locate by shape, never by name.** Minified identifiers change every
+  deploy: find entry points with `indexOf` on stable anchors (an
+  object-literal key sequence, a string literal) plus small regexes on a
+  short slice -- not a regex over a multi-megabyte module (that took 17 s).
+  Return empty the moment a shape is missing; never throw, never guess.
+- **Serialize and cache.** Player code keeps module-level state, so run
+  one resolve at a time (a promise queue). Cache the built runtime per
+  script-URL set (the deploy) for a few hours; fetch short-lived tokens
+  fresh every time.
+- **Stub the browser honestly.** Pass its anti-automation checks only by
+  presenting a normal browser surface (no `webdriver`, native-looking
+  functions, `window.crypto`, `parent.postMessage`, a silent console); do
+  not patch the site's checks themselves.
+- **Treat output as untrusted.** Use only `http(s)` URLs from it, and
+  verify them like any other result (fetch the playlist, a segment).
+- **Document the exit** in the scraper's docstring: what the code does,
+  how each entry point is found, and what would make it return empty, so a
+  failure after a redesign is quick to diagnose.
 
 ### Getting past Cloudflare/Turnstile with FlareSolverr, for research only
 
@@ -408,6 +524,25 @@ was found, the same as a WASM source whose gate can't run outside a real
 browser. `cf_clearance` is also short-lived and tied to the solving
 IP/UA pair -- it will not survive being solved in one place and used from
 stremio-tv's own server IP even if the contract had somewhere to put it.
+
+If only the API/HTML is Cloudflare-gated but the resulting stream URLs
+are cookie-free (a signed URL, a token in the query string), it ships
+normally -- FlareSolverr was only needed to find the recipe.
+
+**Permission:** you may bypass a Turnstile/Cloudflare challenge to reach a
+source whose *content itself* is gated for reasons beyond bot detection
+(paywalls, sign-in-walled lists) -- but FlareSolverr is for the challenge
+page only, not for defeating access controls the site owner put up for
+other reasons.
+
+**Stock headless Chromium is not FlareSolverr.** A simple/legacy JS
+challenge, or a site that only *looks* Cloudflare-branded, clears with
+plain Playwright in a second or two; a real managed challenge or Turnstile
+does not clear at any timeout (it fingerprints CDP/`navigator.webdriver`;
+only a patched browser build gets through, and downloading one is out of
+scope). A different proof-of-work gate (Anubis) can look transiently
+cleared before it finishes -- confirm the real page loaded before trusting
+a "cleared" result from a non-Cloudflare gate.
 
 ### What this scraper contract cannot do -- recognise a dead end early
 
@@ -483,15 +618,68 @@ what `dlhd` needed (the bullet above describes the problem as it stood):
   segment of every viewer. It still cannot add a cookie, sign each
   request, or talk to the network; those remain dead ends here.
 
-## Updating the template
+## Updating the template -- and contract changes go to BOTH host repos
 
-`template/scraper-template.mts` is a manual copy of
-stremio-tv-plugin-live-tv's `docs/scraper-template.ts` (itself a copy of
-that repo's `src/scraper-types.ts` -- see the chain in that repo's
-`AGENTS.md`). If a session working in *that* repo changes the contract (a
-new field on `ScrapedChannel`, a new capability like `ScrapedRail`, a
-change to the merge/rail-heading/priority rules), it should update the
-copy here too, in the same commit or close to it -- this file goes stale
-otherwise, silently, since nothing enforces the two staying in sync. When
-starting work here, it is worth a quick diff against that repo's
-`docs/scraper-template.ts` to confirm this copy hasn't already drifted.
+`ScrapedStream`, `ScrapedChannel` and the rest of the scraper contract are
+defined in **two** host repositories, and this repo's
+`template/scraper-template.mts` is a richer copy of them. All three must
+change together; a contract field that only one host knows silently breaks on
+the other (an unknown field is ignored, so the stream plays as something it is
+not):
+
+1. [`stremio-tv-plugin-live-tv`](https://github.com/gauravsuman007/stremio-tv-plugin-live-tv):
+   `src/scraper-types.ts`, copied byte-identical to `docs/scraper-template.ts`
+   (`cp`, same commit).
+2. [`live-tv`](https://github.com/gauravsuman007/live-tv), the standalone app
+   (stremio-tv with the Live TV plugin compiled in): `src/livetv/scraper-types.ts`,
+   copied byte-identical to `docs/scraper-template.ts`.
+3. This repo's `template/scraper-template.mts` (same interfaces, minus
+   `export`, plus the worked-example code).
+
+**Whenever a session here needs a contract change -- a new `ScrapedStream`
+field, a new hook -- it is not done until the other two are, and it has to
+include the HOST side too (what to do with the field, when to refuse it, a
+test), because a field the hosts ignore is worse than none.** The mechanics
+that bit last time: the two host copies had already DRIFTED (the app's
+`ScrapedRailFilter`, `group`, `by`, `pages` were missing from the plugin's), so
+add only what you are adding and say so rather than "fixing" the drift in
+passing; `relay.ts`, `relay-support.ts`, `resolve.ts` and `clearkey.ts` are
+byte-identical between the two (`cmp` them), `channels.ts` is not (patch both);
+each host bumps its version (the plugin: `plugin.json` AND `src/plugin.ts`
+together; the app: `package.json` AND `src/livetv/plugin.ts`); a feature that
+needs the core to cooperate also bumps core's `PLUGIN_API_VERSION` (stremio-tv
+`src/plugin-types.ts`, copied into the plugin's `src/plugin-types.ts` and the
+app's), and the hosts gate the feature on it, dropping the stream on an older
+core rather than offering it broken. Each host's `AGENTS.md` has a section for
+the feature; read it before changing the field.
+
+Contract changes so far: `decoder` (plugin API 1.2.0), `resolver` (1.5.0),
+`clearKey` (1.6.0, below), `logos` (no API change -- the plugin's own tile: an
+optional pair of image URLs for one card, drawn side by side; give both sides'
+flags for a fixture and keep `logo` = the first). `template/scraper-template.mts` is otherwise
+unchanged by hand-editing -- diff it against the app's `docs/scraper-template.ts`
+when you start, since nothing enforces the copies staying in step.
+
+### ClearKey: encrypted DASH is deliverable now
+
+`ScrapedStream.clearKey = { kid, key }` (32 hex characters each) with `url` set
+to a DASH `.mpd` encrypted with Common Encryption. The HOST runs ffmpeg
+(`-cenc_decryption_key`, copy, no re-encode) and serves ordinary HLS through
+its relay, so the television never sees DASH or a key. `referrer`/`userAgent`
+apply to the manifest and every segment. Rules for a scraper:
+
+- Only ClearKey. Widevine/PlayReady/FairPlay are not, and nothing here
+  handles them; leave those streams out.
+- One key pair must open every track. Per-track keys cannot be expressed.
+- Do not combine with `decoder`. A `resolver` may return `clearKey` itself.
+- Needs plugin API 1.6.0 and an ffmpeg on the host; otherwise the host drops
+  the stream. The host checks it only as far as the manifest, so a wrong key
+  shows up as a picture that never appears -- test against the live stream
+  (cricweb.mts and a real `liveFetch` did, see its header).
+- Keys on these sites are usually JSON constants in a Shaka player page
+  (`const DRM_KEY = "..."`): parse them, never evaluate the page.
+
+Before this, a source that restreamed DRM-protected video with a published
+ClearKey was unscrapable here (cricweb's `drm/player.php` family, 20 of its 45
+fixture sources). A ClearKey stream is now just a stream; a Widevine,
+PlayReady or FairPlay one still cannot be delivered by anything in this chain.

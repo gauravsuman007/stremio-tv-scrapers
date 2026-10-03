@@ -1,0 +1,61 @@
+# Scraper strategies
+
+The *how* behind [AGENTS.md](AGENTS.md)'s rules: techniques that found a stream URL on sources which did not hand it over in plain JSON/HTML, and the recurring shapes (envelopes, gates, dead ends) worth recognising on sight. Status of each source lives in [SOURCES.md](SOURCES.md); the per-source recipe of an implemented scraper lives in its own docstring. Add a technique or a recipe here whenever you solve something new, and add a dead end the moment you are sure it is one -- the next attempt has only this file to go on.
+
+Most of this was worked out on the sibling VOD repository
+(`stremio-tv-scrapers-web-vod`, movies/series via TMDB id) and carries over
+because the gates are the same ones; examples below name its sources where
+they are the clearest case. Live TV differs in two ways: the contract's output
+is a bare URL plus `referrer`/`userAgent` (no relay, no `headers`, no
+`Cookie`), and a channel's address is often signed and short-lived (use a
+[resolver](AGENTS.md), not `build()`, then).
+
+## Order of attack (cheapest first)
+
+1. **Look at the real page's requests before assuming a gate.** Several sources written off as "needs a browser" were a JSON API behind a click, or the stream list already inlined in the server-rendered HTML (Next.js flight data: `self.__next_f.push([1,"..."])` string chunks, concatenated; or an inline `window.x = {...}` / `rawLinks` array). Log every request *and* response of the real page first.
+2. **Grep the bundle for the endpoint** when nothing crypto shows in the network log. A static key (`x-player-key`, an AES key hex constant next to `crypto.subtle.importKey`) is usually a literal in `assets/index-*.js`; re-read it from there when decryption starts failing.
+3. **Run the site's code to learn, don't decode it** (AGENTS.md: `node:vm`, WASM in Node). Instrument, then port the result into clean TypeScript.
+4. **Check whether the result is even deliverable** (AGENTS.md: "What this scraper contract cannot do") *before* going deep. A gate that repeats on every segment, a cookie, a per-request signature, a stream bound to the caller's IP -- recognise these early.
+
+## Techniques, in the order they paid off
+
+- **Real Playwright with `context.addInitScript`**, never a sandboxed MCP/agent browser: those inject after the page's own scripts ran and silently drop network history. Playwright is research-only here -- install it in a scratch directory, never as a dependency of the repo or a scraper.
+- **Hook `crypto.subtle` and log a stack trace on every call** (args *and* results, `exportKey` too). The stack names the bundle and column of each crypto step: "where does this come from" becomes a lookup, and a "random" field turns out to be an XOR key.
+- **Log requests with `request.allHeaders()`** (includes cookies) and log *all* requests, not just `/api/`: half of one protocol was a Next.js **server action** (`POST` to the page URL with a `next-action` header, answer `text/x-component`), invisible to an `/api/` filter. Action ids come from `createServerReference)("<id>",...,"getStream")` in the page's chunks.
+- **Hand the page a substitute WASM instance.** `instance.exports` is frozen -- assigning a wrapper into it does nothing. Wrap `WebAssembly.instantiate`/`instantiateStreaming` and *return a different object* `{ module, instance: { exports: { ...wrapped } } }`; dump linear memory at every pointer argument before and after the call to see an opaque export's plaintext in and out.
+- **Splice test in a real session.** Let the browser build a request, then in `page.route` replace one component with your Node-built one and see whether the server still accepts. Isolates the single rejected field in a few runs (it was a custom hash, the rest being replayed constants).
+- **Instrument a WASM-internal function without renumbering anything.** `wasm2wat`, find the function by a constant (SHA-256's `K[0]` = `i32.const 1116352408`; an AES fixslice has no S-box but ~100 `i32.rotr`), insert at its entry `local.get 0..n; f64.const -12345; ...; call <an existing import of matching type that is dead on this path>`, `wat2wasm`, and let that import's JS side dump memory when it sees the sentinel. Logging every SHA-256 compression block reads a key derivation off directly.
+- **Find a derived AES key by brute force over memory.** After the module decrypts once in a Node harness, try every 4-byte-aligned 32-byte window of linear memory as an AES-256 key over the first ciphertext block (and the obvious IV layouts); JSON-looking plaintext gives key and counter convention in seconds.
+- **Vary the clock before trusting a "random" constant.** A salt hard-coded from one run died at the top of the hour; it was `salt[i] = (i+1) ^ (hour >> (i & 7))`. Re-run the harness at other times/hours before porting.
+- **A module's import list is not evidence it uses those imports on your path.** Canvas/navigator/`localStorage` imports often only feed anti-bot checks (page age from `performance.now()`, a time bucket) around a pure key schedule. Trace before giving up; stub `performance.now()` so the page looks several seconds old.
+- **Isolate missing dependencies one at a time.** If glue calls `libsodium`/`crypto.subtle`/a hash, install the equivalent Node package or use Node's built-in `crypto`, rather than polyfilling browser globals generically.
+- **Run an obfuscated JS VM in `node:vm` for instrumentation.** Stub `document`/`canvas`/`navigator`, shim `Worker` if it spawns blob-URL workers, wrap in `with (Proxy)` to log every global read that the sandbox lacks, then patch opcode handlers (found by grepping the source) to log operands -- that exposes a custom hash's constants.
+- **Replay an observed request verbatim with `curl`** before porting anything: write the body to a file and use `--data-binary @file` (shell quoting mangles base64's `+`/`/`).
+- **Observe a front-end instead of reading it.** For a site whose providers live in a blocked or minified library, open a working front-end, let it search, and read `performance.getEntriesByType('resource')`: many apps push every upstream call through their own relay with the destination URL-encoded in a query parameter, so the real APIs and parameters are visible (hex-obfuscated destinations: ignore). Then probe those upstreams directly from Node. Do not hunt for the blocked library's code or mirrors.
+- **Test where you will run.** A resolve that works on a laptop can return nothing from the host's datacentre IP (providers are chosen by address; the `asn=` baked into a URL ties it to the resolving network). Use a resolver (resolved where it plays) and, when you can, test inside the real container before calling it fixed. The symptom of a changed player is always a bare `null`/empty result -- make failures empty, never thrown.
+- **Never trust a plausible playlist.** A source can answer an outdated handshake with a decoy video, a master whose segments all 403 (an ad CDN: `domain forbidden`), or segments that are really PNG images with the video hidden in the pixels. Check what the address actually serves: first segment, durations, a real decode.
+
+## Recurring shapes
+
+- **Encrypted JSON envelope, static key.** `base64(iv[12] ‖ ciphertext ‖ tag)` or hex, AES-256-GCM, key a hex literal in the client bundle (url fields prefixed e.g. `ns_`; no prefix = plaintext). Node: `crypto.subtle.importKey("raw", Buffer.from(KEY,"hex"), "AES-GCM", false, ["decrypt"])`, then `decrypt({name:"AES-GCM", iv}, key, rest)`. When it fails, the key rotated: re-read it from the bundle.
+- **Key derived from the request.** `SHA-256("<label>|<path>|<token>")` used directly as the AES-GCM key; the label (a build id) is a constant inside an obfuscated player script -- run its string-array decoder in `node:vm` to read it. `HMAC-SHA256(key, "key:t:nonce:path")` request signatures: the server often accepts any random key string.
+- **Custom base64 alphabet** (decode with the alphabet substituted, then UTF-8 -> JSON) and **ROT13 + marker deletion + char-code shift + reverse** wrappers: ten lines each; find them next to the `fetch`.
+- **XOR then encrypt** (plaintext XORed with the AES key before GCM) and **keystreams from a seed** (FNV-1a + murmur3 `fmix32`): found by the `crypto.subtle` hook showing a key used twice, or by a magic header on the decoded body (`mvm1`).
+- **Proof-of-work gates.** Often named SHA-256 but not: check the real hash (a memory-hard ChaCha-quarter-round mix, ported natively). The solution is the first counter with N leading zero bits; ~65k tries, 0.5-3 s in Node. A different gate (Anubis) can look transiently cleared before it actually finishes -- confirm the real page loaded.
+- **Device attestation endpoints** that only *score* a client profile: a made-up desktop profile with random hashes and a fresh ECDSA key passes. Try that before assuming real-browser fingerprinting.
+- **Single-use challenges** (sign a nonce, wrap a key with an RSA public key fetched from the site): every attempt repeats the whole handshake; budget ~1.5 s each and don't loop providers carelessly -- fresh seeds per call got later ones rejected for a minute; reuse one seed across parallel providers.
+- **Rotating embed domains** and **cookies from the embed's own API** (`byse_viewer_id`-style): send them on every later call of that handshake.
+- **Zero-import WASM that only computes** (a Rust `seal_request`, a PoW solver): ship it as a black box, after `WebAssembly.Module.imports(module).length === 0` at load. A module *with* imports: recover the algorithm and reimplement, never ship it.
+- **Several URLs for one catalogue.** Different fronts often sit on the same CDN/encode (identical rendition ladder and duration give it away). Triage by *pool*, not by front-end count: one working source of a pool is worth building, its siblings add nothing.
+
+## Dead ends: how they looked, so you stop early
+
+- A CDN that refuses every requester except the site's own undocumented internal client (`428`, `requiresProxy`, no request ever visible in the page's own network log): not a header or signature you are missing. Park it with the date.
+- Segments behind a per-request signature (`403 bad signature`), PNG-prefixed segments that no demuxer handles, ad-CDN segments that answer `domain forbidden`.
+- A bytecode VM whose key, base path and CSRF token are constants of one deploy, held only in the bytecode. Native reimplementation breaks on the next release; only AGENTS.md's "Running a site's own code" route applies, with its safeguards and the maintainer's approval.
+- A real Cloudflare managed challenge / Turnstile against stock headless Chromium (no timeout clears it; FlareSolverr's patched browser does) -- and then only for research, since the stream itself needs `cf_clearance` which the contract cannot carry.
+- A **bait front-end**: pages that open "install this extension to unlock the content" popups or redirect to an unrelated installer on load. Malvertising, not a source. Skip on sight and don't interact.
+- A host that does not resolve at all (NXDOMAIN) or a decommissioned route that returns the same landing-page HTML for every id.
+- A blind sweep of front-ends guessing `/watch/<id>` and clicking captured nothing: players mount only on real interaction, so each needs its own look. Diminishing returns after a handful of forks -- stop unless something genuinely new surfaces.
+
+Record the working recipe (or the dead end, with what was tried and the date) in the scraper's docstring and update SOURCES.md. A source that was blocked "because it needs a browser for WASM" is worth retrying when its bundle changes or a technique above becomes applicable -- note the last attempt date so retriage knows when it is stale.
