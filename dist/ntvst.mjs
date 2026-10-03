@@ -286,8 +286,39 @@ async function decodeEpicsports(channelId) {
     return null;
 }
 // --- per-backend resolvers ---------------------------------------------------
+//: cdnlivetv.tv allows 100 requests a minute per address and answers the
+//: rest with a bare 429 (no Retry-After; the wait is in `ratelimit-reset`).
+//: There are ~4,000 channels on it, so a crawl is bound by this and by
+//: nothing else: unthrottled, twelve workers burned the minute's budget in
+//: seconds and then spent the rest of the build sleeping in per-request
+//: backoffs (hours). One shared pacer keeps the whole crawl just under the
+//: limit, and a 429 pauses every worker until the window resets.
+const CDNLIVE_PER_MINUTE = 85;
+let cdnliveNext = 0;
+async function cdnliveSlot() {
+    const now = Date.now();
+    const at = Math.max(now, cdnliveNext);
+    cdnliveNext = at + 60_000 / CDNLIVE_PER_MINUTE;
+    if (at > now)
+        await new Promise((r) => setTimeout(r, at - now));
+}
+async function fetchCdnlive(channelUrl) {
+    for (let attempt = 0;; attempt++) {
+        await cdnliveSlot();
+        const response = await withTimeout((signal) => fetch(channelUrl, { signal, headers: { "User-Agent": BROWSER_UA } }));
+        if (response.ok)
+            return response.text();
+        if (response.status === 429 && attempt < 5) {
+            const reset = Number(response.headers.get("ratelimit-reset"));
+            const wait = (Number.isFinite(reset) && reset > 0 ? reset : 30) * 1000 + 500;
+            cdnliveNext = Math.max(cdnliveNext, Date.now() + wait);
+            continue;
+        }
+        throw new Error(`${channelUrl} -> ${response.status}`);
+    }
+}
 async function resolveCdnlive(channelUrl) {
-    const page = await fetchText(channelUrl);
+    const page = await fetchCdnlive(channelUrl);
     const streamUrl = extractCdnliveStreamUrl(page);
     if (!streamUrl)
         return null;
@@ -425,7 +456,15 @@ async function fetchAllChannels(pacingMs) {
 }
 async function buildChannels(pacingMs) {
     const raw = await fetchAllChannels(pacingMs);
-    const streams = await mapWithConcurrency(raw, CHANNEL_RESOLVE_CONCURRENCY, resolveChannelStream);
+    console.log(`ntvst: ${raw.length} channels listed, resolving streams`);
+    let resolved = 0;
+    const streams = await mapWithConcurrency(raw, CHANNEL_RESOLVE_CONCURRENCY, async (channel) => {
+        const stream = await resolveChannelStream(channel);
+        if (++resolved % 1000 === 0)
+            console.log(`ntvst: resolved ${resolved}/${raw.length}`);
+        return stream;
+    });
+    console.log(`ntvst: channel crawl done, ${streams.filter(Boolean).length} playable`);
     const channels = [];
     for (let i = 0; i < raw.length; i++) {
         const stream = streams[i];
@@ -886,7 +925,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.7.0",
+    version: "1.7.1",
     configSchema,
     tasks,
     build
