@@ -44,9 +44,9 @@
  *   them without notice. Verified 2026-10-01 on a live segment: 1.43MB
  *   PNG in, 1.51MB of TS out, sync byte on every 188-byte packet.
  *
- *   The decoding runs inside stremio-tv's Live TV plugin, on every segment,
- *   via its relay (plugin API 1.2.0+). On an older stremio-tv these
- *   streams are dropped there rather than offered -- see the template.
+ *   The decoding runs inside live-tv, on every segment, via its relay. On a
+ *   host without segment decoders these streams are dropped rather than
+ *   offered -- see the template.
  */
 import { gunzipSync, inflateSync } from "node:zlib";
 const SCRAPER_ID = "dlhd";
@@ -178,7 +178,7 @@ function splitCountry(raw) {
     return { name: raw, country: "", countryName: "" };
 }
 /** Categories from the name alone -- this site gives none. Unrecognised
- *  is fine: the plugin files it under General. */
+ *  is fine: live-tv files it under General. */
 function categoriesOf(name) {
     const n = name.toLowerCase();
     const out = [];
@@ -477,7 +477,7 @@ function webpExif(bytes) {
     }
     return null;
 }
-/** Exported for the standalone check below; the plugin calls it through
+/** Exported for the standalone check below; the host calls it through
  *  `decoders.tiktikpx`. */
 export function unwrapSegment(bytes) {
     if (isTs(bytes))

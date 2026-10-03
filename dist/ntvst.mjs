@@ -1,10 +1,10 @@
 /**
  * ntv.st -- 24/7 live-TV channels plus a live sporting-events rail.
  *
- * Ported from the `DirectScraper`-style plugin (`scrapers/ntvst.py` in this
+ * Ported from the `DirectScraper`-style scraper (`scrapers/ntvst.py` in this
  * same repo / in riven-tpdb-scrapers) to the `Scraper.build()` contract
  * described in `docs/scraper-template.ts`. The reverse-engineering notes
- * below are unchanged from that plugin -- only the shape of the output
+ * below are unchanged from that scraper -- only the shape of the output
  * (one `build()` call returning every channel up front, rather than a
  * `search`/`resolve` pair called on demand) is new.
  *
@@ -67,7 +67,7 @@
  *   capability this repository has no way to provide, not a research gap.
  *   Channels on this backend are skipped rather than handed back broken.
  *   (Since 2026-10-01 that relay exists -- the scraper contract's segment
- *   `decoders`, run by the Live TV plugin -- and `dlhd.mts` uses it for
+ *   `decoders`, run by live-tv -- and `dlhd.mts` uses it for
  *   the whole DaddyLive catalogue, a superset of these ~200 channels. They
  *   stay skipped here so the two do not list the same feeds twice.)
  *

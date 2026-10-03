@@ -768,7 +768,7 @@ function webpExif(bytes) {
     }
     return null;
 }
-/** Exported for the standalone check below; the plugin calls it through
+/** Exported for the standalone check below; the host calls it through
  *  `decoders.tiktikpx`. */
 function unwrapSegment(bytes) {
     if (isTs(bytes))

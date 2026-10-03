@@ -15,10 +15,10 @@
  * scraper is loaded, first one loaded wins.
  */
 const API = "https://iptv-org.github.io/api";
-//: stremio-tv's merge step keeps this exact id-prefix, `iptv:`, as a
-//: pre-plugin-system legacy exception granted specifically to whichever
-//: scraper has the id "iptv-org" (by id, not by how it was loaded -- see
-//: that repo's AGENTS.md), so a deployment's existing favourites and
+//: live-tv's merge step keeps this exact id-prefix, `iptv:`, as a
+//: legacy exception granted specifically to whichever scraper has the id
+//: "iptv-org" (by id, not by how it was loaded -- see live-tv's
+//: AGENTS.md), so a deployment's existing favourites and
 //: watch-progress rows keep matching once this scraper is imported. NEVER
 //: change this scraper's own id away from "iptv-org" below, or this
 //: exception stops applying and every existing id here becomes unrecognised.

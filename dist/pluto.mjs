@@ -21,7 +21,7 @@
  * Only the JWT-carrying stitcher serves real programming. The token lasts
  * 24 hours and the host rebuilds every 12, so a URL is always replaced
  * before it expires. The JWT also records the caller's IP/region at boot
- * time; a player on a very different network from the stremio-tv server
+ * time; a player on a very different network from the live-tv server
  * may therefore see a different region's slate or a geo-block.
  *
  * The line-up is whatever region the SERVER running `build()` sits in --
