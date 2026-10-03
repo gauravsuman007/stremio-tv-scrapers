@@ -132,12 +132,18 @@ const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 const RATE_LIMIT_RETRIES = 6;
 const RATE_LIMIT_BACKOFF_MS = 2_000;
 async function fetchText(url, init) {
+    const retries = init?.retries ?? RATE_LIMIT_RETRIES;
     for (let attempt = 0;; attempt++) {
         const response = await withTimeout((signal) => fetch(url, { signal, headers: { "User-Agent": BROWSER_UA, ...(init?.headers || {}) } }));
         if (response.ok)
             return response.text();
-        if (response.status === 429 && attempt < RATE_LIMIT_RETRIES) {
-            await new Promise((r) => setTimeout(r, RATE_LIMIT_BACKOFF_MS * (attempt + 1)));
+        if (response.status === 429 && attempt < retries) {
+            // The server says how long it wants; otherwise back off hard and
+            // longer each time. A 429 on the channel index is a window, not a
+            // verdict -- giving up at the 6th try (~40s) failed whole builds.
+            const asked = Number(response.headers.get("retry-after"));
+            const wait = Number.isFinite(asked) && asked > 0 ? asked * 1000 : RATE_LIMIT_BACKOFF_MS * (attempt + 1);
+            await new Promise((r) => setTimeout(r, Math.min(wait, 120_000)));
             continue;
         }
         throw new Error(`${url} -> ${response.status}`);
@@ -386,26 +392,35 @@ const CHANNEL_RESOLVE_CONCURRENCY = 12;
 //: recovering from it after the fact. Configurable (see `configSchema`
 //: below) since a different deployment may sit behind a different network
 //: path to ntv.st and need more, or could afford less.
-const DEFAULT_CHANNEL_PAGE_PACING_MS = 250;
+const DEFAULT_CHANNEL_PAGE_PACING_MS = 600;
+//: Pages already fetched by a crawl that then failed, so the next attempt
+//: resumes where it stopped instead of starting at offset 0 and walking
+//: back into the same rate limit.
+let pagesHeld = [];
+//: Patient retries for the channel index specifically: ~100 pages from one
+//: address trips ntv.st's limiter, and it clears in a minute or two.
+const CHANNEL_PAGE_RETRIES = 12;
 async function fetchAllChannels(pacingMs) {
-    const all = [];
-    let offset = 0;
-    let first = true;
+    let offset = pagesHeld.length;
+    const pace = pacingMs;
+    let first = offset === 0;
     while (true) {
         if (!first)
-            await new Promise((r) => setTimeout(r, pacingMs));
+            await new Promise((r) => setTimeout(r, pace));
         first = false;
-        const data = await fetchJson(`${CHANNEL_INDEX_URL}?limit=${CHANNEL_PAGE_SIZE}&offset=${offset}`);
+        const data = await fetchJson(`${CHANNEL_INDEX_URL}?limit=${CHANNEL_PAGE_SIZE}&offset=${offset}`, { retries: CHANNEL_PAGE_RETRIES });
         if (!data.success)
             break;
         const channels = data.channels || [];
         if (channels.length === 0)
             break;
-        all.push(...channels);
+        pagesHeld.push(...channels);
         if (!data.has_more)
             break;
         offset += CHANNEL_PAGE_SIZE;
     }
+    const all = pagesHeld;
+    pagesHeld = [];
     return all;
 }
 async function buildChannels(pacingMs) {
@@ -519,9 +534,30 @@ async function buildEventsRail(server = DEFAULT_MATCH_SERVER) {
     */
     if (!eventChannels.length)
         return { channels: [], rails: [] };
+    /*
+        PLUS ONE RAIL PER SPORT. The combined rail above stays (it is the one
+        other event scrapers merge into); the per-sport ones let a viewer
+        who wants football open "Live Soccer" instead of scanning a rail
+        mostly made of e-sports. The generic buckets ntv.st files unlabelled
+        fixtures under are not sports, so they get no rail of their own.
+    */
+    const bySport = new Map();
+    for (const e of eventChannels) {
+        if (/^(sports event|uncategorized)$/i.test(e.category))
+            continue;
+        const ids = bySport.get(e.category) || [];
+        ids.push(e.channel.id);
+        bySport.set(e.category, ids);
+    }
+    const sportRails = [...bySport.entries()].map(([category, channelIds]) => ({
+        id: `live-${category.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        heading: `Live ${category}`,
+        channelIds,
+        group: "Live events"
+    }));
     return {
         channels: eventChannels.map((e) => e.channel),
-        rails: [{ id: "live-events", heading: "Live Events", channelIds: eventChannels.map((e) => e.channel.id), group: "Live events" }]
+        rails: [{ id: "live-events", heading: "Live Events", channelIds: eventChannels.map((e) => e.channel.id), group: "Live events" }, ...sportRails]
     };
 }
 // --- entry point -----------------------------------------------------------
@@ -558,7 +594,7 @@ const configSchema = [
         default: DEFAULT_CHANNEL_PAGE_PACING_MS,
         min: 0,
         max: 5000,
-        help: "Delay between channel-list page requests. Confirmed empirically that 250ms clears the whole catalogue with zero 429s from ntv.st's rate limiter -- lower this only if a specific deployment's network path can safely go faster."
+        help: "Delay between channel-list page requests. 250ms cleared the catalogue from a home connection but the server's address got 429s at that rate, so the default is 600ms -- lower this only if a specific deployment's network path can safely go faster."
     }
 ];
 /*
@@ -675,8 +711,19 @@ async function build() {
     // pressure that trips its rate limiter (see pagePacingMs above) for no
     // real time saved -- buildEventsRail's own request volume is small next
     // to buildChannels'.
-    const channels = await ensureChannels(DEFAULT_CHANNEL_PAGE_PACING_MS);
+    // Events first, and the channel list only if it is already held. A cold
+    // crawl of the channel list is 10k+ resolves and takes the better part
+    // of an hour; waiting for it meant a fresh start (or a manual Run) showed
+    // NOTHING from this source -- not even the live events, which take five
+    // seconds. The crawl is started in the background instead; the host's
+    // scheduler runs the "channels" task on its first tick and expires this
+    // source's result when it lands, so the list joins on the next rebuild.
     const events = await ensureEvents();
+    if (!channelsCache) {
+        void ensureChannels(DEFAULT_CHANNEL_PAGE_PACING_MS).catch((cause) => console.error("ntvst: channel crawl failed", cause));
+        return { channels: events.channels, rails: events.rails };
+    }
+    const channels = channelsCache;
     return {
         channels: [...channels, ...events.channels],
         rails: [...events.rails, ...railsFor(channels, SCRAPER_ID, "NTVSTREAM")]
@@ -839,7 +886,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.6.0",
+    version: "1.7.0",
     configSchema,
     tasks,
     build
