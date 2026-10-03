@@ -555,6 +555,13 @@ async function fetchAll() {
             // Both sides' flags on one tile (the host draws the pair); `logo` is the home side for a host that predates `logos`.
             logo: first.logo,
             ...(first.logo && second.logo ? { logos: [first.logo, second.logo] } : {}),
+            // Who and when, so the host merges this with the same fixture from other sources.
+            event: {
+                sides: [titleCase(first.name), titleCase(second.name)],
+                ...(event.league ? { competition: event.league } : {}),
+                sport,
+                ...(event.start > 0 ? { start: event.start } : {})
+            },
             website: `${WATCH}/watch/${event.slug}`,
             network: SCRAPER_NAME,
             streams
@@ -649,7 +656,7 @@ async function build() {
 export const cricwebScraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.2.0",
+    version: "1.3.0",
     configSchema,
     tasks,
     build

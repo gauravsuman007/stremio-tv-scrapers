@@ -219,7 +219,7 @@ async function fetchEventPage(slug) {
             continue;
         rows.push({ link: cells[0], channel: cells[1], quality: cells[3], language: cells[5], embed });
     }
-    return { title, rows, flags };
+    return { title, rows, flags, names: flags.length === 2 ? sides.map((side) => side.name.trim()) : [] };
 }
 function classify(embed) {
     let url;
@@ -797,6 +797,13 @@ async function fetchLive() {
             // Both flags drawn together where the page has two sides; the league's own picture otherwise.
             logo: page.flags[0] || event.leagueLogo,
             ...(page.flags.length === 2 ? { logos: page.flags } : {}),
+            // Who and when, so the host merges this with the same fixture from other sources.
+            event: {
+                ...(page.names.length === 2 ? { sides: page.names } : { title: page.title || event.slug.replace(/-/g, " ") }),
+                ...(event.league ? { competition: event.league } : {}),
+                sport: "cricket",
+                ...(event.start > 0 ? { start: event.start } : {})
+            },
             website: `${SITE}/events/${event.slug}`,
             network: SCRAPER_NAME,
             streams
@@ -868,7 +875,7 @@ async function build() {
 export const crichdScraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.1.0",
+    version: "1.2.0",
     configSchema,
     tasks,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },

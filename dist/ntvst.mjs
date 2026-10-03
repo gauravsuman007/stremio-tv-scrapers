@@ -84,6 +84,51 @@
  * (minutes, not hours). Nothing here should be cached -- `build()` fetches
  * everything fresh on every call, same as the nightly rebuild expects.
  */
+/**
+ * "UEFA Nations League : Scotland vs North Macedonia", "UFC 332: Silva vs Wang",
+ * "Croatia vs England - UEFA Nations League" -> the sides and the competition,
+ * or null when the text is not a fixture. The sides are what the host matches
+ * on; the competition is only shown.
+ */
+function readFixture(raw) {
+    const versus = /\s+(?:vs\.?|v|versus|@)\s+/i;
+    let name = raw.replace(/[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu, "").replace(/\s+/g, " ").trim();
+    const first = name.search(versus);
+    if (first < 0)
+        return null;
+    let competition = "";
+    const head = name.slice(0, first);
+    const cut = Math.max(head.lastIndexOf(" : "), head.lastIndexOf(": "), head.lastIndexOf(" | "));
+    if (cut > 0) {
+        competition = head.slice(0, cut).trim();
+        name = name.slice(cut).replace(/^\s*[:|]\s*/, "").trim();
+    }
+    const tail = /^(.*?)(?:\s+[-\u2013|]\s+|\s+\()([^)]{3,60})\)?$/.exec(name);
+    if (tail && versus.test(tail[1] || "")) {
+        competition = competition || (tail[2] || "").trim();
+        name = (tail[1] || "").trim();
+    }
+    const sides = name.split(versus).map((side) => side.trim()).filter(Boolean);
+    if (sides.length < 2 || sides.length > 8)
+        return null;
+    if (sides.some((side) => side.length < 2 || side.length > 60 || /^(?:simulcast|tba|tbd|tbc|live|hd|fhd|uhd|sd|4k|tv|\d+)$/i.test(side)))
+        return null;
+    return { sides, competition };
+}
+/** The `event` and the display name for a card whose only fact is its title. */
+function eventFor(title, extra = {}) {
+    const fixture = readFixture(title);
+    const competition = fixture?.competition || extra.competition || "";
+    return {
+        name: fixture ? fixture.sides.join(" vs ") : title,
+        event: {
+            ...(fixture ? { sides: fixture.sides } : { title }),
+            ...(competition ? { competition } : {}),
+            ...(extra.sport ? { sport: extra.sport } : {}),
+            ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
+        }
+    };
+}
 const SCRAPER_ID = "ntvst";
 function idFor(rawId) {
     return `live:${SCRAPER_ID}:${rawId}`;
@@ -534,11 +579,13 @@ async function buildEventsRail(server = DEFAULT_MATCH_SERVER) {
             continue;
         const match = matches[i];
         const category = match.category || "uncategorized";
+        const described = eventFor(match.title || "Untitled", { sport: category === "uncategorized" ? "" : category.toLowerCase() });
         eventChannels.push({
             category,
             channel: {
                 id: idFor(`event:${server}:${match.id}`),
-                name: match.title || "Untitled",
+                name: described.name,
+                event: described.event,
                 country: "",
                 countryName: "",
                 countryFlag: "",
@@ -925,7 +972,7 @@ function railsFor(channels, sourceId, sourceName, wanted = { countries: true, la
 export const ntvStScraper = {
     id: SCRAPER_ID,
     name: "NTVSTREAM",
-    version: "1.7.1",
+    version: "1.8.0",
     configSchema,
     tasks,
     build

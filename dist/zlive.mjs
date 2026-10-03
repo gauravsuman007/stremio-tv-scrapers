@@ -83,6 +83,51 @@
  * sources may be configured as direct links with no resolve step).
  */
 import { gunzipSync, inflateSync } from "node:zlib";
+/**
+ * "UEFA Nations League : Scotland vs North Macedonia", "UFC 332: Silva vs Wang",
+ * "Croatia vs England - UEFA Nations League" -> the sides and the competition,
+ * or null when the text is not a fixture. The sides are what the host matches
+ * on; the competition is only shown.
+ */
+function readFixture(raw) {
+    const versus = /\s+(?:vs\.?|v|versus|@)\s+/i;
+    let name = raw.replace(/[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu, "").replace(/\s+/g, " ").trim();
+    const first = name.search(versus);
+    if (first < 0)
+        return null;
+    let competition = "";
+    const head = name.slice(0, first);
+    const cut = Math.max(head.lastIndexOf(" : "), head.lastIndexOf(": "), head.lastIndexOf(" | "));
+    if (cut > 0) {
+        competition = head.slice(0, cut).trim();
+        name = name.slice(cut).replace(/^\s*[:|]\s*/, "").trim();
+    }
+    const tail = /^(.*?)(?:\s+[-\u2013|]\s+|\s+\()([^)]{3,60})\)?$/.exec(name);
+    if (tail && versus.test(tail[1] || "")) {
+        competition = competition || (tail[2] || "").trim();
+        name = (tail[1] || "").trim();
+    }
+    const sides = name.split(versus).map((side) => side.trim()).filter(Boolean);
+    if (sides.length < 2 || sides.length > 8)
+        return null;
+    if (sides.some((side) => side.length < 2 || side.length > 60 || /^(?:simulcast|tba|tbd|tbc|live|hd|fhd|uhd|sd|4k|tv|\d+)$/i.test(side)))
+        return null;
+    return { sides, competition };
+}
+/** The `event` and the display name for a card whose only fact is its title. */
+function eventFor(title, extra = {}) {
+    const fixture = readFixture(title);
+    const competition = fixture?.competition || extra.competition || "";
+    return {
+        name: fixture ? fixture.sides.join(" vs ") : title,
+        event: {
+            ...(fixture ? { sides: fixture.sides } : { title }),
+            ...(competition ? { competition } : {}),
+            ...(extra.sport ? { sport: extra.sport } : {}),
+            ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
+        }
+    };
+}
 const SCRAPER_ID = "zlive";
 function idFor(rawId) {
     return `live:${SCRAPER_ID}:${rawId}`;
@@ -416,9 +461,11 @@ async function buildEventsRail() {
         const direct = /^https?:\/\//i.test(source.key);
         const category = entry.category || entry.sport || entry.league || "uncategorized";
         const rawId = entry.id ?? entry.key ?? entry.slug ?? eventTitle(entry);
+        const described = eventFor(eventTitle(entry), { sport: category === "uncategorized" ? "" : category.toLowerCase(), competition: entry.league || "" });
         const channel = {
             id: idFor(`event:${rawId}`),
-            name: eventTitle(entry),
+            name: described.name,
+            event: described.event,
             country: "",
             countryName: "",
             countryFlag: "",
@@ -810,7 +857,7 @@ const DECODER = "tiktikpx";
 export const zliveScraper = {
     id: SCRAPER_ID,
     name: "zlive.st",
-    version: "1.4.1",
+    version: "1.5.0",
     resolvers: { zlive: resolveHandle },
     decoders: {
         [DECODER]: (segment) => {
