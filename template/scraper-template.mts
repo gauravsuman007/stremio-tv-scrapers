@@ -124,6 +124,20 @@ interface ScrapedStream {
     /** User-Agent this stream needs, or "". Sent the same way. */
     userAgent: string;
     /**
+     * OPTIONAL. Further request headers, sent on every request the stream
+     * makes (playlist, variants, segments, keys): `Origin`, a token header,
+     * `Cookie`. Names are free; `Host`, `Content-Length`, `Accept-Encoding`,
+     * `Range`, `User-Agent` and `Referer` are ignored (use the two fields
+     * above); at most 16, values up to 4 KB, no line breaks. `Cookie` and
+     * `Authorization` go only to the host the stream's own address is on,
+     * and are dropped on a redirect to another host; ClearKey streams get
+     * neither. STATIC: a header that must differ on every request cannot be
+     * carried -- a per-play cookie belongs in a resolver, which may return
+     * `headers` too. Needs live-tv 1.9.0 (the standalone app); the plugin
+     * ignores the field, and so does an older host.
+     */
+    headers?: Record<string, string>;
+    /**
      * OPTIONAL. The name of an entry in this scraper's own `decoders`
      * (see `Scraper.decoders` and `SegmentDecoder` below) that every
      * SEGMENT of this stream must pass through before a player can read it.
@@ -221,6 +235,8 @@ interface ResolvedStream {
     url: string;
     referrer?: string;
     userAgent?: string;
+    /** Replaces the stream's own `headers` when given (see `ScrapedStream.headers`). */
+    headers?: Record<string, string>;
     /** The key for a stream that is encrypted (see `ScrapedStream.clearKey`),
      *  when the resolver is what knows it -- a signed manifest and its key
      *  often change together. Overrides the stream's own. */

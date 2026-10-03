@@ -515,15 +515,13 @@ stream endpoint, confirming it's reachable -- exactly as you would a
 captured browser session.
 
 This is a research tool for finding the recipe, never something a shipped
-scraper depends on at request time: **`ScrapedStream` has no `headers`
-field and no way to carry a cookie at all** (only `referrer` and
-`userAgent` -- see "What this scraper contract cannot do" below), so a
-source whose *stream itself* (not just the page that reveals it) needs
-`cf_clearance` to keep working is unscrapable here regardless of how it
-was found, the same as a WASM source whose gate can't run outside a real
-browser. `cf_clearance` is also short-lived and tied to the solving
-IP/UA pair -- it will not survive being solved in one place and used from
-stremio-tv's own server IP even if the contract had somewhere to put it.
+scraper depends on at request time: a source whose *stream itself* (not
+just the page that reveals it) needs `cf_clearance` to keep working is
+unscrapable here regardless of how it was found. `ScrapedStream.headers`
+(live-tv 1.9.0) can carry a `Cookie` now, but `cf_clearance` is
+short-lived and tied to the solving IP/UA pair -- it will not survive being
+solved in one place (a FlareSolverr on your laptop) and used from the
+host's own IP, and the host runs no FlareSolverr.
 
 If only the API/HTML is Cloudflare-gated but the resulting stream URLs
 are cookie-free (a signed URL, a token in the query string), it ships
@@ -548,9 +546,11 @@ a "cleared" result from a non-Cloudflare gate.
 
 Before sinking hours into a source, check whether solving it would even
 produce something `Scraper.build()` can return. The contract
-(`template/scraper-template.mts`) is a **static URL plus two optional
-strings** (`referrer`, `userAgent`) -- nothing else. That rules out, and
-is worth recognising *before* spending a research session on:
+(`template/scraper-template.mts`) is a **URL plus `referrer`, `userAgent`
+and (live-tv 1.9.0) a static `headers` record**, sent on every request the
+stream makes -- the playlist, variants, segments and keys. No per-request
+signing, no ongoing network access in a decoder. That rules out, and is
+worth recognising *before* spending a research session on:
 
 - **A source needing a cookie, custom header, or signed request repeated
   on every segment fetch**, not just the initial playlist. `ntv.st`'s
@@ -566,16 +566,26 @@ is worth recognising *before* spending a research session on:
   correctly re-diagnosed as an architectural limit rather than an
   unsolved cracking problem (see `ntvst.mts`'s docstring for the full
   history).
-- **A source whose stream needs a `Cookie` header**, from a Cloudflare
-  clearance or otherwise: there is no field for it. Unlike the
-  `stremio-tv-plugin-web-scraper` sibling repository (whose relay can be
-  extended to allow `Cookie` with a host-side change -- see that
-  project's `AGENTS.md`), this repository has no relay in the loop at
-  all: stremio-tv's player fetches the URL you return directly. Adding
-  `Cookie` support here would mean changing `ScrapedStream` itself (a
-  stremio-tv-side change, not something this repository controls) and
-  updating `template/scraper-template.mts` to match -- worth raising, not
-  worth assuming your scraper alone can route around.
+- **Headers and cookies: possible, but only STATIC ones.** (live-tv
+  1.9.0.) `ScrapedStream.headers` (and a resolver's `ResolvedStream.headers`,
+  which replaces them) is any record of request headers -- `Origin`, a token
+  header, `Cookie` -- sent on every request. Names are free; the host refuses
+  only what would break the request (`Host`, `Content-Length`,
+  `Accept-Encoding`, `Range`, `User-Agent`/`Referer` which have their own
+  fields). `Cookie` and `Authorization` go only to the host the stream's own
+  address is on, never to a CDN a playlist merely names, and not along a
+  redirect to another host; ClearKey streams get neither. The TV is not
+  involved at all -- the host's relay fetches everything. What stays
+  impossible: a header that must differ on every request (a signed request
+  per segment). A per-play session cookie is a resolver's job: it runs on the
+  host's own IP, so an IP-bound session matches the IP that plays. The plugin
+  repo (`stremio-tv-plugin-live-tv`) does NOT have this field; a scraper that
+  needs it needs the standalone app.
+- **A CDN that 403s Node's TLS handshake.** The giveaway: the same URL gives
+  200 to curl/ffmpeg/a browser and 403 to Node however you set the headers.
+  The host retries such a 403 at TLS 1.2 (live-tv 1.10.0, `fetchvia.ts`), which
+  is what the Streamed CDN wants (`streamed.mts`). Your own `fetch` calls
+  inside a scraper do NOT get this fallback: test them from Node, not from curl.
 - **A source that behaves differently by caller IP.** A resolve that
   works from a laptop can legitimately return nothing (or a different
   provider entirely) from stremio-tv's own server -- the sibling
@@ -618,7 +628,16 @@ what `dlhd` needed (the bullet above describes the problem as it stood):
   segment of every viewer. It still cannot add a cookie, sign each
   request, or talk to the network; those remain dead ends here.
 
-## Updating the template -- and contract changes go to BOTH host repos
+## Updating the template -- and contract changes go to the live-tv app first
+
+**The standalone app (`live-tv`) is the host under active development; the
+plugin (`stremio-tv-plugin-live-tv`) is maintenance-only** -- the owner makes
+basic updates there to keep it compatible with the scrapers in this repo, no
+more. Design and implement a contract change in the app; port it to the plugin
+only as a minimal compatibility update, and say in the field's doc comment
+which host has it (`headers` is app-only). The rest of this section was
+written when both hosts moved in step; read "all three" as "the app, this
+template, and -- minimally, when a scraper needs it -- the plugin".
 
 `ScrapedStream`, `ScrapedChannel` and the rest of the scraper contract are
 defined in **two** host repositories, and this repo's
@@ -654,7 +673,8 @@ core rather than offering it broken. Each host's `AGENTS.md` has a section for
 the feature; read it before changing the field.
 
 Contract changes so far: `decoder` (plugin API 1.2.0), `resolver` (1.5.0),
-`clearKey` (1.6.0, below), `logos` (no API change -- the plugin's own tile: an
+`clearKey` (1.6.0, below), `headers` (live-tv 1.9.0, app only; see "What this
+scraper contract cannot do"), `logos` (no API change -- the plugin's own tile: an
 optional pair of image URLs for one card, drawn side by side; give both sides'
 flags for a fixture and keep `logo` = the first). `template/scraper-template.mts` is otherwise
 unchanged by hand-editing -- diff it against the app's `docs/scraper-template.ts`
