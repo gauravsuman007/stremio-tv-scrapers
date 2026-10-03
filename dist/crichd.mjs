@@ -63,15 +63,26 @@
  *            streame.center/`. Its feed for Willow answered 404 even in a
  *            real browser on 2026-10-03, so the segment format is UNVERIFIED
  *            -- it is offered as plain HLS, without the decoder.
+ *   streamed `embed.st/embed/<source>/<id>/<n>` (e.g. `admin/admin-willow-
+ *            cricket/1`) -- the Streamed player. `POST embed.st/fetch` with the
+ *            three strings, ChaCha20 under the `goat` header, gives a
+ *            `lbN.strmd.st/secure/<token>/.../playlist.m3u8` that needs
+ *            `Referer: https://embed.st/`. Segments are WebP images with the
+ *            TS inside (`tiktikpx` handles them). The full recipe is in
+ *            streamed.mts; this file repeats the handshake because a scraper
+ *            cannot import another one. Needs live-tv 1.10.0 (the CDN
+ *            wants TLS 1.2). Verified 2026-10-03: `admin-willow-cricket`.
+ *   ppv      `embedindia.st/embed/<path>` (PPV.ST's twin of the above, see
+ *            ppv.mts): the same handshake with one string and the key in
+ *            `island`. No crichd row linked one on 2026-10-03; supported
+ *            because it costs nothing once the handshake exists.
  *
  *   NOT supported, and why (recorded so nobody retries them blindly):
  *   - `s1.vertex.st/ch?id=N` -> `api/player.php?id=N` -> `lineagest.click/
  *     e/<id>`: the stream config is an encrypted blob decoded by an
  *     obfuscated, devtools-hostile bundle, and the player never requested a
  *     stream in headless Chromium (25s, ads blocked or not).
- *   - `embed.st/embed/admin/...`: the Streamed/PPV `lock.wasm` family
- *     (73 imports, TLS-fingerprinted CDN); see SOURCES.md's Streamed row.
- *   Rows pointing at either are skipped. Any other host is skipped too.
+ *   Rows pointing at `s1.vertex.st`, or at any host not listed above, are skipped.
  *
  * HANDLES AND THE RESOLVER
  *   Every address above is signed, expires within hours, or needs a
@@ -102,7 +113,170 @@
  *   whose slug disagrees with its label (first four letters) stays on the
  *   event card, as the site lists it, but is NOT emitted as a channel.
  */
+import { createDecipheriv } from "node:crypto";
 import { gunzipSync, inflateSync } from "node:zlib";
+// BEGIN event-key -- identical in every scraper that lists live events. scripts/sync-event-key.mjs keeps the copies in step.
+/** Flags (regional indicators), tag characters, variation selectors, joiners. */
+const EVENT_DECORATION = /[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu;
+/** Words some lists put on a club's name and others leave off. */
+const EVENT_GENERIC = new Set(["fc", "cf", "afc", "sc", "fk", "sk", "cd", "ud", "club", "the", "de", "calcio"]);
+/** Whole-name spellings that are one team. Keys are already folded. */
+const EVENT_ALIASES = {
+    "czech republic": "czechia",
+    czech: "czechia",
+    "united states": "usa",
+    "united states of america": "usa",
+    us: "usa",
+    "korea republic": "south korea",
+    "republic of korea": "south korea",
+    "cote d ivoire": "ivory coast",
+    turkiye: "turkey",
+    holland: "netherlands",
+    "bosnia and herzegovina": "bosnia",
+    "bosnia herzegovina": "bosnia",
+    uae: "united arab emirates",
+    macedonia: "north macedonia",
+    "republic of ireland": "ireland",
+    "man utd": "manchester united",
+    "man united": "manchester united",
+    "man city": "manchester city",
+    spurs: "tottenham",
+    "tottenham hotspur": "tottenham",
+    "wolverhampton wanderers": "wolves",
+    "paris saint germain": "psg",
+    "paris sg": "psg",
+    "inter milan": "inter",
+    internazionale: "inter",
+    "bayern munich": "bayern",
+    "bayern munchen": "bayern",
+    "dr congo": "congo dr",
+    "china pr": "china",
+    "ir iran": "iran",
+    "russian federation": "russia",
+    "cabo verde": "cape verde",
+    swaziland: "eswatini"
+};
+/** A team's identity: folded, with the noise words and spellings that differ between sources taken out. */
+function teamKey(name) {
+    const folded = name
+        .replace(EVENT_DECORATION, " ")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\bwomen'?s?\b|[[(]\s*w\s*[\])]|\bfem(?:inino|enino|inine)?\b/g, " women ")
+        .replace(/\bunder[\s-]?(\d{2})\b/g, " u$1 ")
+        .replace(/\bno\.?\s*\d{1,2}\b(?=\s+[a-z])/g, " ")
+        .replace(/\bst\b\.?/g, "saint")
+        .replace(/['`’]/g, "")
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim()
+        .replace(/\s+/g, " ");
+    const alias = EVENT_ALIASES[folded] || folded;
+    const tokens = alias.split(" ").filter((token) => token && !EVENT_GENERIC.has(token));
+    return (tokens.length ? tokens : alias.split(" ").filter(Boolean)).join(" ");
+}
+/**
+ * "UEFA Nations League : Scotland vs North Macedonia", "UFC 332: Silva vs
+ * Wang", "Croatia vs England - UEFA Nations League" -> the sides and the
+ * competition, or null when the text is not a fixture.
+ */
+function readFixture(raw) {
+    const versus = /\s+(?:vs\.?|v\.?|versus|@)\s+/i;
+    let name = raw.replace(EVENT_DECORATION, "").replace(/\s+/g, " ").trim();
+    const first = name.search(versus);
+    if (first < 0)
+        return null;
+    let competition = "";
+    const head = name.slice(0, first);
+    const cut = Math.max(head.lastIndexOf(" : "), head.lastIndexOf(": "), head.lastIndexOf(" | "));
+    if (cut > 0) {
+        competition = head.slice(0, cut).trim();
+        name = name.slice(cut).replace(/^\s*[:|]\s*/, "").trim();
+    }
+    const tail = /^(.*?)(?:\s+[-–|]\s+|\s+\()([^)]{3,60})\)?$/.exec(name);
+    if (tail && versus.test(tail[1] || "")) {
+        competition = competition || (tail[2] || "").trim();
+        name = (tail[1] || "").trim();
+    }
+    const sides = name.split(versus).map((side) => side.trim()).filter(Boolean);
+    if (sides.length < 2 || sides.length > 8)
+        return null;
+    if (sides.some((side) => side.length < 2 || side.length > 60 || /^(?:simulcast|tba|tbd|tbc|live|hd|fhd|uhd|sd|4k|tv|\d+)$/i.test(side)))
+        return null;
+    return { sides, competition };
+}
+/** A name that is one of these words is a different team when it is the extra one -- never trimmed away. */
+const EVENT_MARKER = /^(?:u\d\d|women|ii|iii|b|reserves?|youth|jr|junior|academy|castilla|amateur)$/;
+/** Too common on their own to stand for a team ("State", "New"). */
+const EVENT_COMMON = new Set(["city", "united", "town", "county", "athletic", "sporting", "real", "club", "national", "state", "college", "university", "new", "north", "south", "east", "west", "saint", "los", "san", "las", "fort", "sint"]);
+/**
+ * The other names one team goes by: its identity with trailing words dropped
+ * ("Ohio State Buckeyes" is also "Ohio State", "UNLV Rebels" is also "UNLV"),
+ * longest first, starting with the full identity. A team carrying a women's,
+ * youth or reserve word has none -- dropping it would turn one team into another.
+ */
+function teamNames(name) {
+    const full = teamKey(name);
+    const tokens = full.split(" ").filter(Boolean);
+    if (tokens.some((token) => EVENT_MARKER.test(token)))
+        return [full];
+    const names = [full];
+    let head = tokens;
+    /* Drop trailing words one at a time, but never a word like "United" or "State": that is part of the name. */
+    while (head.length > 1 && !EVENT_COMMON.has(head[head.length - 1] || "")) {
+        head = head.slice(0, -1);
+        if (head.length === 1 && ((head[0] || "").length < 4 || EVENT_COMMON.has(head[0] || "")))
+            break;
+        names.push(head.join(" "));
+    }
+    return names;
+}
+/** Every combination of the sides' names, as sorted keys: the exact one first, at most 16. */
+function eventKeys(sides) {
+    let keys = [[]];
+    for (const side of sides) {
+        const names = teamNames(side);
+        keys = keys.flatMap((held) => names.map((name) => [...held, name]));
+        if (keys.length > 64)
+            keys = keys.slice(0, 64);
+    }
+    return [...new Set(keys.map((parts) => `v:${[...parts].sort().join("|")}`))].slice(0, 16);
+}
+/**
+ * The card's `event` and display name. `key` is what the host merges on: the
+ * sides' identities, sorted (so order does not matter), or for an event with
+ * no opponents its folded title without the year. Two sources that compute
+ * the same key for an event are the same event -- the host compares nothing else
+ * but the start time. `keys` are further keys the same event goes by (a
+ * name with its trailing words dropped), for a source that spells a team
+ * shorter: two cards are one event when ANY of their keys is shared.
+ */
+function eventFor(title, extra = {}) {
+    const fixture = extra.sides && extra.sides.length >= 2 ? { sides: extra.sides, competition: "" } : readFixture(title);
+    const competition = fixture?.competition || extra.competition || "";
+    const titleKey = title
+        .replace(EVENT_DECORATION, " ")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\b20\d\d(?:\/\d\d)?\b/g, " ")
+        .replace(/\b(?:live|stream|hd|fhd|full\s+event)\b/g, " ")
+        .replace(/[^a-z0-9]+/g, "");
+    const keys = fixture ? eventKeys(fixture.sides) : [];
+    const key = fixture ? `v:${fixture.sides.map(teamKey).sort().join("|")}` : titleKey.length >= 6 ? `t:${titleKey}` : "";
+    return {
+        name: fixture ? fixture.sides.join(" vs ") : title,
+        event: {
+            ...(fixture ? { sides: fixture.sides } : { title }),
+            ...(key ? { key } : {}),
+            ...(keys.length > 1 ? { keys: keys.filter((other) => other !== key) } : {}),
+            ...(competition ? { competition } : {}),
+            ...(extra.sport ? { sport: extra.sport } : {}),
+            ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
+        }
+    };
+}
 const SCRAPER_ID = "crichd";
 const SITE = "https://crichd.at";
 const SCRAPER_NAME = "CricHD";
@@ -238,6 +412,13 @@ function classify(embed) {
     const streame = url.hostname.endsWith("streame.center") ? /^\/embed\/(ch\d+)\.php$/.exec(url.pathname) : null;
     if (streame?.[1])
         return { kind: "streame", key: streame[1] };
+    // The Streamed player: `embed.st/embed/<source>/<id>/<n>` (and PPV.ST's twin on embedindia.st).
+    const streamed = url.hostname === "embed.st" ? /^\/embed\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_.-]+)\/(\d+)\/?$/.exec(url.pathname) : null;
+    if (streamed?.[1] && streamed[2] && streamed[3])
+        return { kind: "streamed", key: `${streamed[1]}/${streamed[2]}/${streamed[3]}` };
+    const ppv = url.hostname === "embedindia.st" ? /^\/embed\/([A-Za-z0-9][A-Za-z0-9/_.-]*)$/.exec(url.pathname) : null;
+    if (ppv?.[1])
+        return { kind: "ppv", key: ppv[1].replace(/\/$/, "") };
     return null;
 }
 function handleFor(source) {
@@ -246,7 +427,7 @@ function handleFor(source) {
 function sourceOfHandle(handle) {
     try {
         const url = new URL(handle);
-        const match = url.hostname === HANDLE_HOST ? /^\/(dlhd|trendy|streame)\/([^/]+)$/.exec(url.pathname) : null;
+        const match = url.hostname === HANDLE_HOST ? /^\/(dlhd|trendy|streame|streamed|ppv)\/([^/]+)$/.exec(url.pathname) : null;
         return match ? { kind: match[1], key: decodeURIComponent(match[2]) } : null;
     }
     catch {
@@ -359,6 +540,8 @@ async function resolveHandle(handle) {
     const source = sourceOfHandle(handle);
     if (!source)
         return null;
+    if (source.kind === "streamed" || source.kind === "ppv")
+        return resolveEmbed(source);
     const deadline = Date.now() + 10_000;
     const url = await playlistFor(source, deadline);
     if (!url)
@@ -374,6 +557,173 @@ async function resolveHandle(handle) {
         return null;
     }
     return { url, referrer: referrer || undefined, userAgent: BROWSER_UA };
+}
+// --- the Streamed player's own handshake (embed.st, embedindia.st) ------------
+//
+// Copied from streamed.mts / ppv.mts, which have the full account: a POST to
+// the embed's `/fetch` answers text in a fixed alphabet that ChaCha20 turns
+// into a signed `.../secure/<token>/.../index.m3u8` (key = a 32-letter
+// response header, `goat` on embed.st, `island` on embedindia.st). The
+// segments are WebP images with the TS inside; `unwrapSegment` below already
+// copes with that (its `webpExif` branch and its sync-byte scan), so these
+// streams use the `tiktikpx` decoder too.
+/** The 64 symbols, in value order, of the text the embed answers with. Pad is `T`. */
+const ALPHABET = "XYZ[\\]^_`abcdefghijklmnopqxyz{|}~!\"#$%&'()*+,-./0123GHIJKLMNOPBF";
+const SYMBOL = new Map([...ALPHABET].map((char, index) => [char, index]));
+function unalphabet(text) {
+    const out = [];
+    let acc = 0;
+    let bits = 0;
+    for (const char of text) {
+        if (char === "T")
+            break;
+        const value = SYMBOL.get(char);
+        if (value === undefined)
+            throw new Error(`symbol ${JSON.stringify(char)} outside the alphabet`);
+        acc = (acc << 6) | value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push((acc >> bits) & 0xff);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    return Buffer.from(out);
+}
+function varint(value) {
+    const out = [];
+    let rest = value;
+    while (rest >= 0x80) {
+        out.push((rest & 0x7f) | 0x80);
+        rest >>>= 7;
+    }
+    out.push(rest);
+    return out;
+}
+/** protobuf: field N = the Nth string. */
+function requestBody(...values) {
+    const parts = [];
+    values.forEach((value, index) => {
+        const bytes = Buffer.from(value, "utf8");
+        parts.push(((index + 1) << 3) | 2, ...varint(bytes.length), ...bytes);
+    });
+    return Buffer.from(parts);
+}
+/** `{1: bytes}` -> the bytes, or null. */
+function field1(body) {
+    if (body[0] !== 0x0a)
+        return null;
+    let at = 1;
+    let length = 0;
+    let shift = 0;
+    for (;;) {
+        const byte = body[at++];
+        if (byte === undefined)
+            return null;
+        length |= (byte & 0x7f) << shift;
+        shift += 7;
+        if (!(byte & 0x80))
+            break;
+    }
+    return body.subarray(at, at + length);
+}
+/** The `/fetch` answer -> the playlist URL, or null. */
+export function decodeAnswer(body, key) {
+    const text = field1(body);
+    if (!text || key.length !== 32)
+        return null;
+    const raw = unalphabet(text.toString("latin1"));
+    if (raw.length < 12 + 16 + 8)
+        return null;
+    const nonce = raw.subarray(0, 12);
+    const sealed = raw.subarray(12, raw.length - 16); // the last 16 bytes are a Poly1305 tag, not checked
+    const iv = Buffer.concat([Buffer.from([1, 0, 0, 0]), nonce]); // RFC 8439: block counter starts at 1
+    const cipher = createDecipheriv("chacha20", Buffer.from(key, "latin1"), iv);
+    const plain = Buffer.concat([cipher.update(sealed), cipher.final()]).toString("latin1");
+    return /^https:\/\/[a-z0-9.-]+\/secure\/[A-Za-z0-9/_.=~-]+\.m3u8$/.test(plain) ? plain : null;
+}
+/**
+ * The key's header is not always called `goat`: embedindia.st (PPV.ST) sends
+ * it as `island`, and the name is the embed's own. What never changes is its
+ * shape, 32 letters/digits, so every header of that shape is tried.
+ */
+export function decodeResponse(body, headers) {
+    for (const [, value] of headers) {
+        if (!/^[A-Za-z0-9]{32}$/.test(value))
+            continue;
+        const playlist = decodeAnswer(body, value);
+        if (playlist)
+            return playlist;
+    }
+    return null;
+}
+/**
+ * `/fetch` answers 429 beyond roughly 40 calls in a burst or ~10 a second
+ * sustained (measured: 60 sequential calls 0.7 s apart, no 429), and a sweep
+ * of every stream's health asks for all of them at once. A token bucket
+ * (15 burst, 4 a second) keeps a viewer's press of Play from queueing behind
+ * more than a moment of that, and a 429 is waited out once.
+ */
+const BUCKET = 15;
+const REFILL_PER_SECOND = 4;
+let tokens = BUCKET;
+let refilledAt = Date.now();
+let turn = Promise.resolve();
+function takeToken() {
+    const mine = turn.then(async () => {
+        for (;;) {
+            const now = Date.now();
+            tokens = Math.min(BUCKET, tokens + ((now - refilledAt) / 1000) * REFILL_PER_SECOND);
+            refilledAt = now;
+            if (tokens >= 1) {
+                tokens -= 1;
+                return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, Math.ceil(((1 - tokens) / REFILL_PER_SECOND) * 1000)));
+        }
+    });
+    turn = mine;
+    return mine;
+}
+const EMBED_HOSTS = { streamed: "https://embed.st", ppv: "https://embedindia.st" };
+async function postEmbed(kind, path, fields) {
+    const host = EMBED_HOSTS[kind];
+    const once = async () => {
+        await takeToken();
+        return withTimeout((signal) => fetch(`${host}/fetch`, {
+            method: "POST",
+            signal,
+            headers: {
+                "content-type": "application/octet-stream",
+                "user-agent": BROWSER_UA,
+                origin: host,
+                referer: `${host}/embed/${path.split("/").map(encodeURIComponent).join("/")}`
+            },
+            body: new Uint8Array(requestBody(...fields))
+        }), 15_000);
+    };
+    const first = await once();
+    if (first.status !== 429)
+        return first;
+    await first.arrayBuffer().catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    return once();
+}
+/** The playlist is NOT fetched here to see whether it is alive: its CDN 403s
+ *  Node's TLS 1.3 handshake (the host retries at TLS 1.2, a `fetch` here
+ *  cannot), and the host checks every address it is given anyway. */
+async function resolveEmbed(source) {
+    const kind = source.kind;
+    const fields = kind === "streamed" ? source.key.split("/") : [source.key];
+    if (fields.length !== (kind === "streamed" ? 3 : 1) || fields.some((field) => !field))
+        return null;
+    const response = await postEmbed(kind, source.key, fields);
+    if (!response.ok)
+        return null;
+    const playlist = decodeResponse(Buffer.from(await response.arrayBuffer()), response.headers);
+    if (!playlist)
+        return null;
+    return { url: playlist, referrer: `${EMBED_HOSTS[kind]}/`, userAgent: "" };
 }
 // --- names, countries, languages -------------------------------------------------
 function fold(text) {
@@ -786,9 +1136,15 @@ async function fetchLive() {
             channels.set(id, channel);
         }
         const league = event.league.toLowerCase();
+        const described = eventFor(page.title || event.slug.replace(/-/g, " "), {
+            ...(page.names.length === 2 ? { sides: page.names } : {}),
+            competition: event.league,
+            sport: "cricket",
+            start: event.start
+        });
         events.push({
             id: idFor(`event:${event.slug}`),
-            name: page.title || event.slug.replace(/-/g, " "),
+            name: described.name,
             country: "",
             countryName: "",
             countryFlag: "",
@@ -797,13 +1153,7 @@ async function fetchLive() {
             // Both flags drawn together where the page has two sides; the league's own picture otherwise.
             logo: page.flags[0] || event.leagueLogo,
             ...(page.flags.length === 2 ? { logos: page.flags } : {}),
-            // Who and when, so the host merges this with the same fixture from other sources.
-            event: {
-                ...(page.names.length === 2 ? { sides: page.names } : { title: page.title || event.slug.replace(/-/g, " ") }),
-                ...(event.league ? { competition: event.league } : {}),
-                sport: "cricket",
-                ...(event.start > 0 ? { start: event.start } : {})
-            },
+            event: described.event,
             website: `${SITE}/events/${event.slug}`,
             network: SCRAPER_NAME,
             streams
@@ -822,39 +1172,16 @@ const configSchema = [
         help: "How often the home page is re-read for matches that are on now, and each match's channel list."
     }
 ];
-/** Single-flight cache, same reasoning as dlhd.mts's. */
-let cache = null;
-let inFlight = null;
-function ensure() {
-    if (cache)
-        return Promise.resolve(cache);
-    inFlight ||= fetchLive()
-        .then((result) => (cache = result))
-        .finally(() => {
-        inFlight = null;
-    });
-    return inFlight;
-}
-const tasks = [
-    {
-        id: "events",
-        label: "Refresh live matches",
-        intervalConfigKey: "eventsIntervalMinutes",
-        async run() {
-            const previous = cache;
-            cache = null;
-            try {
-                await ensure();
-            }
-            catch (cause) {
-                cache = previous;
-                throw cause;
-            }
-        }
-    }
-];
+/*
+    EVERYTHING HERE COMES FROM THE LIVE MATCHES: the channels are the ones a
+    match's source list names. So `build()` has nothing of its own and
+    `buildEvents()` carries both.
+*/
 async function build() {
-    const { events, channels } = await ensure();
+    return { channels: [] };
+}
+async function buildEvents() {
+    const { events, channels } = await fetchLive();
     const ids = events.map((e) => e.id);
     return {
         channels: [...events, ...channels],
@@ -875,12 +1202,12 @@ async function build() {
 export const crichdScraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.2.0",
+    version: "1.4.0",
     configSchema,
-    tasks,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
     resolvers: { [RESOLVER]: resolveHandle },
-    build
+    build,
+    buildEvents
 };
 // -------------------------------------------------------------------------
 // `npx tsx scrapers/crichd.mts` -- prints what is live, then resolves every
@@ -889,7 +1216,7 @@ export const crichdScraper = {
 // -------------------------------------------------------------------------
 if (import.meta.url === `file://${process.argv[1]}`) {
     (async () => {
-        const catalogue = await build();
+        const catalogue = await buildEvents();
         const events = catalogue.channels.filter((c) => c.id.includes(":event:"));
         console.log(`${events.length} live events, ${catalogue.channels.length - events.length} channels, ${(catalogue.rails || []).length} rails`);
         for (const event of events) {
