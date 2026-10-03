@@ -1,24 +1,17 @@
-# Developing a live-TV scraper for stremio-tv
+# Developing a live-TV scraper for live-tv
 
-This repository has no access to
-[stremio-tv-plugin-live-tv](https://github.com/gauravsuman007/stremio-tv-plugin-live-tv)
-(the actual consumer of a scraper built here) and doesn't need any --
+This repository has no access to [live-tv](https://github.com/gauravsuman007/live-tv)
+(the standalone app that consumes a scraper built here) and doesn't need any --
 everything the contract requires lives in
 [`template/scraper-template.mts`](template/scraper-template.mts), a richer,
 example-augmented copy of THAT repo's own `docs/scraper-template.ts` (itself
-a byte-identical copy of its `src/scraper-types.ts` -- the canonical
+a byte-identical copy of its `src/livetv/scraper-types.ts` -- the canonical
 `Scraper`/`ScrapedChannel`/`ScrapedRail`/... definitions), kept in sync by
-hand whenever it changes there -- see that repository's own `AGENTS.md`,
-"The contracts this repo sits between, and how they stay linked." (Live TV
-is a *plugin* of the separate, private
-[stremio-tv](https://github.com/gauravsuman007/stremio-tv) core app, not
-built into it -- a scraper here never talks to stremio-tv core directly,
-only to the live-tv plugin, so that repo is the one whose contract actually
-matters here.) Read the template file's header comment in full before
-writing anything; it is the actual spec, not a summary of it. This document
-is the workflow around it: how to go from "a source I want to scrape" to a
-file that plugs into a running stremio-tv deployment with **zero further
-editing**.
+hand whenever it changes there -- see that repository's own `AGENTS.md`.
+Read the template file's header comment in full before writing anything; it
+is the actual spec, not a summary of it. This document is the workflow
+around it: how to go from "a source I want to scrape" to a file that plugs
+into a running live-tv deployment with **zero further editing**.
 
 ## The workflow, start to finish
 
@@ -44,7 +37,7 @@ editing**.
    the first channel found -- confirm the count looks right and the first
    channel has a real `streams[0].url`, not `undefined` or an empty string.
 4. **Typecheck it locally with this repository's own `tsconfig.json`**,
-   which mirrors stremio-tv's build flags exactly (`--strict
+   which mirrors live-tv's build flags exactly (`--strict
    --noUncheckedIndexedAccess`, target/module `ES2022`, `moduleResolution:
    bundler`):
    ```bash
@@ -57,13 +50,13 @@ editing**.
    with an `if`, or assert with `!` only where a loop bound already
    guarantees the value exists) -- **never** "fix" a compile error by
    loosening a flag in `tsconfig.json`. A file that only compiles under
-   weaker settings will fail again the moment it reaches stremio-tv's own
+   weaker settings will fail again the moment it reaches live-tv's own
    stricter build, which is the exact failure this workflow exists to
    prevent. **Leave the `dist/` this produced uncommitted** (`git checkout
    dist`, or just don't `git add` it) -- see "`dist/` is built by CI,
    never locally" below for why.
 5. **Set a `version`** on the exported scraper object -- dot-separated
-   integers, e.g. `"1.0.0"`. This is what lets stremio-tv's "Import from
+   integers, e.g. `"1.0.0"`. This is what lets live-tv's "Import from
    GitHub" (see "Delivering it" below) treat a later change as an UPDATE
    rather than either silently ignoring it or blindly re-copying it every
    time regardless of whether anything changed. Optional for a scraper only
@@ -82,7 +75,7 @@ header for the full contract) let your scraper expose user-settable knobs
 -- an interval, a pacing delay -- and split its work into independently
 refreshable, independently schedulable pieces. Most scrapers have one
 uniform refresh rate and need neither; `build()` alone is a complete,
-correct scraper, and stremio-tv's Settings page simply shows no gear icon
+correct scraper, and live-tv's Settings page simply shows no gear icon
 next to one that declares nothing. Reach for `tasks` only when your source
 genuinely has parts that change at different rates and are worth refreshing
 on different schedules -- [`scrapers/ntvst.mts`](scrapers/ntvst.mts) is the
@@ -94,7 +87,7 @@ If you do add either: a task's `run()` is expected to write into a small
 module-level cache that `build()` itself reads from (falling back to
 fetching directly only if a task hasn't run yet -- see `ntvst.mts`'s
 `channelsCache`/`eventsCache`), and a config field's `key` must be
-STABLE -- stremio-tv reconciles stored values against your CURRENT
+STABLE -- live-tv reconciles stored values against your CURRENT
 `configSchema` on every read (a removed key is dropped, a new one gets its
 `default`, a retyped one is treated as new), so reusing a `key` for a field
 with a different meaning would silently hand it an old, unrelated value.
@@ -103,7 +96,7 @@ with a different meaning would silently hand it an old, unrelated value.
 
 Node decides whether a `.js` file is an ES module or CommonJS from the
 nearest `package.json`'s `"type"` field. The directory a dropped-in
-scraper lands in on the stremio-tv side is a bind-mounted data volume with
+scraper lands in on the live-tv side is a bind-mounted data volume with
 no `package.json` at all -- so a bare `.js` compiled from this template's
 `import`/`export` syntax would default to CommonJS there and fail to
 parse. `.mjs` has no such ambiguity; it is always a module, on any host.
@@ -117,7 +110,7 @@ rules, which plain `.ts` does not, catching a class of import mistakes
 
 ## Why `dist/` is committed, and built by CI, never locally
 
-stremio-tv's Settings > Live TV > Sources > "Import from GitHub" reads a
+live-tv's Settings > Live TV > Sources > "Import from GitHub" reads a
 configured repository's `dist/` directory directly, over the GitHub API,
 and drops whatever `.mjs` files it finds straight into that deployment's
 scrapers directory -- no cloning, no build step on that end, because that
@@ -149,32 +142,32 @@ there's no loop to worry about). A pull request only proves the build
   against a file you were never supposed to touch by hand in the first
   place.
 - A `.mts` source change pushed to `main` is not actually live for
-  stremio-tv until **both** the bot's `dist/` commit exists on `main`
-  **and** someone presses "Check for updates" on stremio-tv's own Sources
+  live-tv until **both** the bot's `dist/` commit exists on `main`
+  **and** someone presses "Check for updates" on live-tv's own Sources
   page -- see "The import only happens when someone presses the button"
   below. If you're verifying a fix end-to-end, that means checking
   `main`'s commit history for the follow-up `Build dist/ [skip ci]`
   commit before assuming the change reached anyone.
 
-This exactly mirrors how the `stremio-tv-plugin-web-scraper` sibling
+This exactly mirrors how the `stremio-tv-scrapers-web-vod` sibling
 repository builds its own `dist/` -- see that repository's `AGENTS.md` if
 you need the fuller rationale (submodule-pinned contract typechecking,
 version bumps, etc. -- this repository's own `version` field on each
 scraper object plays the same role its `package.json` version does
 there).
 
-**The import only happens when someone presses the button.** stremio-tv
+**The import only happens when someone presses the button.** live-tv
 does not poll this repository on a schedule or at boot -- once a scraper
-is imported it is read from stremio-tv's own mounted volume at every
+is imported it is read from live-tv's own mounted volume at every
 subsequent boot, with no further dependency on GitHub being reachable,
 until "Check for updates" is pressed again by hand.
 
 ## Delivering it
 
-Three ways stremio-tv accepts a finished scraper (all described in the
+Three ways live-tv accepts a finished scraper (all described in the
 template's header -- this is the short version):
 
-- **Import from GitHub, no copying at all.** On the stremio-tv side:
+- **Import from GitHub, no copying at all.** On the live-tv side:
   Settings > Live TV > Sources > "Import from GitHub", enter this
   repository (`owner/repo`) and -- only if this repository is private --
   an access token; there is no branch field, it always reads `main`. It
@@ -184,9 +177,9 @@ template's header -- this is the short version):
   `dist/` now has a strictly greater `version` than what is loaded --
   which is the entire reason step 5 above matters. This is the route this
   repository is built around, and the route
-  [`scrapers/ntvst.mts`](scrapers/ntvst.mts) actually reaches a stremio-tv
-  deployment by -- stremio-tv ships with nothing built in, so this is not
-  a fallback route for it. (iptv-org, [`scrapers/iptv-org.mts`](scrapers/iptv-org.mts), is the default scraper of the standalone live-tv app, which fetches its `dist/iptv-org.mjs` from here on first start -- so its `id` and `iptv:` prefix are never renamed, and a `version` bump is what updates running installs.)
+  [`scrapers/ntvst.mts`](scrapers/ntvst.mts) actually reaches a live-tv
+  deployment by -- live-tv ships with nothing built in (but for the one scraper below), so this is not
+  a fallback route for it. (iptv-org, [`scrapers/iptv-org.mts`](scrapers/iptv-org.mts), is the default scraper of live-tv, which fetches its `dist/iptv-org.mjs` from here on first start -- so its `id` and `iptv:` prefix are never renamed, and a `version` bump is what updates running installs.)
 - **Drop it in, no rebuild.** Copy `dist/<your-id>.mjs` into the
   `scrapers` directory on that deployment's mounted data volume, then
   either restart the container or use the "Reload sources" action on its
@@ -195,11 +188,11 @@ template's header -- this is the short version):
   GitHub import, this always overwrites -- there is no version check,
   because copying a file in by hand is already a deliberate choice.
 - **Built into the image.** For someone with that repo open: the `.mts`
-  source (not the compiled output) becomes `src/scrapers/<your-id>.ts`
-  there, added to `BUILTIN` in `src/scrapers.ts`. Needs a rebuild and a
+  source (not the compiled output) becomes `src/livetv/scrapers/<your-id>.ts`
+  there, added to `BUILTIN` in `src/livetv/scrapers.ts`. Needs a rebuild and a
   redeploy on that side; not something to do from here, and not how any
-  scraper in this repository is delivered today -- `BUILTIN` is empty on
-  stremio-tv by default. A scraper delivered this way can never be
+  scraper in this repository is delivered today -- `BUILTIN` is empty in
+  live-tv. A scraper delivered this way can never be
   replaced by a GitHub import or a drop-in afterward, on purpose -- both
   routes refuse any id a built-in scraper already claims.
 
@@ -207,7 +200,7 @@ template's header -- this is the short version):
 
 If you're an agent working from this file: the deliverable is judged by
 whether `dist/<your-id>.mjs` -- the one CI produces after your commit, not
-one built by hand -- can be copied straight into a stremio-tv deployment's
+one built by hand -- can be copied straight into a live-tv deployment's
 `scrapers` directory and picked up with **no changes at all** on the
 other end. That means, before calling the scraper done:
 
@@ -220,19 +213,19 @@ other end. That means, before calling the scraper done:
 - The bot's `Build dist/ [skip ci]` follow-up commit lands on `main` (`git
   pull` and check the log, or check the Actions tab) -- a source commit
   with no matching `dist/` update yet is a repository mid-flight, not yet
-  in a state stremio-tv's importer can use.
+  in a state live-tv's importer can use.
 - `node dist/<your-id>.mjs` (the CI-built copy, pulled after the bot's
   commit) runs without throwing an import-time error -- a quick sanity
   check that catches, for instance, a top-level await that behaves
   differently once compiled.
 - The exported object's shape matches the template's `Scraper` interface
-  exactly: `id`, `name`, an OPTIONAL `version`, `build()` -- stremio-tv's
+  exactly: `id`, `name`, an OPTIONAL `version`, `build()` -- live-tv's
   loader only accepts a module whose `default` export, or one of its named
   exports, looks like that shape, and silently skips (with a logged reason
   on that side, which you won't see from here) anything that doesn't.
 - `version` is set and was bumped if this is a change to an existing
   scraper -- an unbumped version means a later "Import from GitHub" /
-  "Check for updates" on the stremio-tv side sees no update at all and
+  "Check for updates" on the live-tv side sees no update at all and
   silently keeps running the OLD copy, even though `dist/` now holds
   something different.
 
@@ -375,7 +368,7 @@ by hand was going to recover it in reasonable time.
    in the shipped scraper -- using Node's real `crypto.webcrypto`
    directly, not the site's own minified functions. By default, never ship
    obfuscated third-party JS, or a `vm`/`jsdom` sandbox, inside a scraper
-   that reaches stremio-tv; those are research-only tools -- not a
+   that reaches live-tv; those are research-only tools -- not a
    security boundary, and not something a `build()` call should depend on
    at runtime. The one exception is "Running a site's own code (last
    resort, with safeguards)" below, which has its own conditions.
@@ -578,9 +571,7 @@ worth recognising *before* spending a research session on:
   involved at all -- the host's relay fetches everything. What stays
   impossible: a header that must differ on every request (a signed request
   per segment). A per-play session cookie is a resolver's job: it runs on the
-  host's own IP, so an IP-bound session matches the IP that plays. The plugin
-  repo (`stremio-tv-plugin-live-tv`) does NOT have this field; a scraper that
-  needs it needs the standalone app.
+  host's own IP, so an IP-bound session matches the IP that plays.
 - **A CDN that 403s Node's TLS handshake.** The giveaway: the same URL gives
   200 to curl/ffmpeg/a browser and 403 to Node however you set the headers.
   The host retries such a 403 at TLS 1.2 (live-tv 1.10.0, `fetchvia.ts`), which
@@ -588,8 +579,8 @@ worth recognising *before* spending a research session on:
   inside a scraper do NOT get this fallback: test them from Node, not from curl.
 - **A source that behaves differently by caller IP.** A resolve that
   works from a laptop can legitimately return nothing (or a different
-  provider entirely) from stremio-tv's own server -- the sibling
-  `stremio-tv-plugin-web-scraper` repository has seen sites pick a CDN
+  provider entirely) from live-tv's own server -- the sibling
+  `stremio-tv-scrapers-web-vod` repository has seen sites pick a CDN
   provider by the caller's address (see its AGENTS.md, "The same site can
   serve a different player depending on the caller's IP"). If a scraper
   that resolves cleanly in research returns nothing once actually
@@ -603,82 +594,60 @@ comes out of a handshake that must be repeated, do not resolve it in
 (`https://<scraper id>.invalid/<key>`), set `resolver: "<name>"`, and export
 `resolvers: { <name>: async (handle) => ({ url, referrer?, userAgent? }) }`.
 The host calls it whenever it checks, probes or plays the channel, and never
-fetches the handle itself (see `AGENTS.md` in stremio-tv's Live TV repo,
-"A stream can be a handle"). `zlive.mts` is the worked example: it also
+fetches the handle itself (see `AGENTS.md` in the live-tv repo,
+"A stream can be a handle: resolving at the moment of use"). `zlive.mts` is the worked example: it also
 shows why a resolver should look at WHAT the address serves -- zlive answers
 an outdated handshake with a looping decoy video instead of an error, which
 passes every "is it a playlist / does it serve bytes" check.
 
-Needs Live TV plugin 1.6.0; an older one drops resolver streams rather than
+Needs live-tv 1.6.0; an older one drops resolver streams rather than
 offering a handle.
 
 ### Segment decoders: the one ongoing transform the contract CAN carry
 
-Since stremio-tv plugin API 1.2.0 / Live TV plugin 1.6.0, a stream may name
-a `decoder` from its scraper's own `decoders` map (see the template). The
-plugin relays every request of such a stream -- playlist, variants,
+A stream may name a `decoder` from its scraper's own `decoders` map (see the
+template; every live-tv has it). The host's relay relays every request of such a stream -- playlist, variants,
 segments, keys -- and runs the decoder on each segment. This is exactly
 what `dlhd` needed (the bullet above describes the problem as it stood):
 `scrapers/dlhd.mts` is the worked example. Two consequences worth knowing:
 
 - `referrer` and `userAgent` are now sent on every segment too, not only
-  on the playlist -- core never sent them before, so a Referer-locked CDN
-  used to pass the plugin's checks and fail on the television.
+  on the playlist -- the relay once sent them on the playlist only, so a
+  Referer-locked CDN passed the checks and failed on the television.
 - A decoder is pure computation over bytes, run on the server for every
   segment of every viewer. It still cannot add a cookie, sign each
   request, or talk to the network; those remain dead ends here.
 
-## Updating the template -- and contract changes go to the live-tv app first
-
-**The standalone app (`live-tv`) is the host under active development; the
-plugin (`stremio-tv-plugin-live-tv`) is maintenance-only** -- the owner makes
-basic updates there to keep it compatible with the scrapers in this repo, no
-more. Design and implement a contract change in the app; port it to the plugin
-only as a minimal compatibility update, and say in the field's doc comment
-which host has it (`headers` is app-only). The rest of this section was
-written when both hosts moved in step; read "all three" as "the app, this
-template, and -- minimally, when a scraper needs it -- the plugin".
+## Updating the template -- and contract changes start in live-tv
 
 `ScrapedStream`, `ScrapedChannel` and the rest of the scraper contract are
-defined in **two** host repositories, and this repo's
-`template/scraper-template.mts` is a richer copy of them. All three must
-change together; a contract field that only one host knows silently breaks on
-the other (an unknown field is ignored, so the stream plays as something it is
-not):
-
-1. [`stremio-tv-plugin-live-tv`](https://github.com/gauravsuman007/stremio-tv-plugin-live-tv):
-   `src/scraper-types.ts`, copied byte-identical to `docs/scraper-template.ts`
-   (`cp`, same commit).
-2. [`live-tv`](https://github.com/gauravsuman007/live-tv), the standalone app
-   (stremio-tv with the Live TV plugin compiled in): `src/livetv/scraper-types.ts`,
-   copied byte-identical to `docs/scraper-template.ts`.
-3. This repo's `template/scraper-template.mts` (same interfaces, minus
-   `export`, plus the worked-example code).
+defined in the [`live-tv`](https://github.com/gauravsuman007/live-tv) repository
+(`src/livetv/scraper-types.ts`, copied byte-identical to
+`docs/scraper-template.ts` there), and this repo's
+`template/scraper-template.mts` is a richer copy of them (same interfaces,
+minus `export`, plus the worked-example code). They must change together; a
+contract field the host does not know is silently ignored, so the stream plays
+as something it is not.
 
 **Whenever a session here needs a contract change -- a new `ScrapedStream`
-field, a new hook -- it is not done until the other two are, and it has to
-include the HOST side too (what to do with the field, when to refuse it, a
-test), because a field the hosts ignore is worse than none.** The mechanics
-that bit last time: the two host copies had already DRIFTED (the app's
-`ScrapedRailFilter`, `group`, `by`, `pages` were missing from the plugin's), so
-add only what you are adding and say so rather than "fixing" the drift in
-passing; `relay.ts`, `relay-support.ts`, `resolve.ts` and `clearkey.ts` are
-byte-identical between the two (`cmp` them), `channels.ts` is not (patch both);
-each host bumps its version (the plugin: `plugin.json` AND `src/plugin.ts`
-together; the app: `package.json` AND `src/livetv/plugin.ts`); a feature that
-needs the core to cooperate also bumps core's `PLUGIN_API_VERSION` (stremio-tv
-`src/plugin-types.ts`, copied into the plugin's `src/plugin-types.ts` and the
-app's), and the hosts gate the feature on it, dropping the stream on an older
-core rather than offering it broken. Each host's `AGENTS.md` has a section for
-the feature; read it before changing the field.
+field, a new hook -- it is not done until the host side is too (what to do
+with the field, when to refuse it, a test), because a field the host ignores
+is worse than none.** Design and implement it in live-tv first, bump its
+version (`package.json` AND `src/livetv/plugin.ts` together), copy
+`scraper-types.ts` over `docs/scraper-template.ts` there, then mirror the
+interface change in this template and say in the field's doc comment which
+live-tv version introduced it. A feature that cannot work on an older live-tv
+should be dropped by the host rather than offered broken (live-tv's AGENTS.md
+has a section for each feature; read it before changing the field).
 
-Contract changes so far: `decoder` (plugin API 1.2.0), `resolver` (1.5.0),
-`clearKey` (1.6.0, below), `headers` (live-tv 1.9.0, app only; see "What this
-scraper contract cannot do"), `logos` (no API change -- the plugin's own tile: an
-optional pair of image URLs for one card, drawn side by side; give both sides'
-flags for a fixture and keep `logo` = the first). `template/scraper-template.mts` is otherwise
-unchanged by hand-editing -- diff it against the app's `docs/scraper-template.ts`
-when you start, since nothing enforces the copies staying in step.
+Contract changes so far: `decoder` (every live-tv), `resolver` (live-tv
+1.6.0), `clearKey` (1.8.0, below), `logos` (1.8.0: an optional pair of image
+URLs for one card, drawn side by side; give both sides' flags for a fixture
+and keep `logo` = the first), `headers` (1.9.0; see "What this scraper
+contract cannot do"), and the TLS 1.2 retry for a CDN that 403s Node's
+handshake (1.10.0, host behaviour, no field). Diff the template against
+live-tv's `docs/scraper-template.ts` when you start, since nothing enforces
+the copies staying in step.
 
 ### ClearKey: encrypted DASH is deliverable now
 
@@ -692,7 +661,7 @@ apply to the manifest and every segment. Rules for a scraper:
   handles them; leave those streams out.
 - One key pair must open every track. Per-track keys cannot be expressed.
 - Do not combine with `decoder`. A `resolver` may return `clearKey` itself.
-- Needs plugin API 1.6.0 and an ffmpeg on the host; otherwise the host drops
+- Needs live-tv 1.8.0 and an ffmpeg on the host; otherwise the host drops
   the stream. The host checks it only as far as the manifest, so a wrong key
   shows up as a picture that never appears -- test against the live stream
   (cricweb.mts and a real `liveFetch` did, see its header).

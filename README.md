@@ -1,18 +1,17 @@
-# stremio-tv-scrapers
+# live-tv-scrapers
 
-Live-TV/sports scrapers for [stremio-tv](https://github.com/gauravsuman007):
+Live-TV/sports scrapers for [live-tv](https://github.com/gauravsuman007/live-tv):
 24/7 channels and live sporting events, scraped straight from a site's own
-CDN with no torrent or debrid step. stremio-tv ships with nothing built
+CDN with no torrent or debrid step. live-tv ships with nothing built
 in — every active scraper here is how it actually gets its live-TV
-channels, including iptv-org, the default scraper of the standalone
-[live-tv](https://github.com/gauravsuman007/live-tv) app. Each file is a
+channels, including iptv-org, its default scraper. Each file is a
 standalone `Scraper` (one `build()`
 function returning a full catalogue) that compiles to a plain `.mjs` file
-in [`dist/`](dist), committed (not gitignored) so stremio-tv's Settings >
+in [`dist/`](dist), committed (not gitignored) so live-tv's Settings >
 Live TV > Sources > "Import from GitHub" can read it straight from this
 repository (always `main` — there is no branch field) — no cloning, no
 manual copying, and a later re-check only replaces a scraper here with a
-genuinely newer one (see "Versioning" in AGENTS.md). stremio-tv does not
+genuinely newer one (see "Versioning" in AGENTS.md). live-tv does not
 poll this repository on its own; a scraper is only re-fetched when someone
 presses "Check for updates".
 
@@ -20,7 +19,7 @@ presses "Check for updates".
 full workflow — copy [`template/scraper-template.mts`](template/scraper-template.mts),
 implement `build()`, set a `version`, compile, verify — written so an agent
 working only in this repository can produce a file that plugs into
-stremio-tv with no further editing. [`SOURCES.md`](SOURCES.md) tracks every
+live-tv with no further editing. [`SOURCES.md`](SOURCES.md) tracks every
 source considered — implemented, blocked, possible or untriaged — so a new
 session can pick up the list without re-triaging from scratch.
 
@@ -82,7 +81,7 @@ resolution (`resolveHesgoal`, `resolveEpicsports`), which pacing on
 ntv.st's own pagination cannot help with.
 
 The channel list and the live-events rail refresh independently once
-imported into stremio-tv (twice daily and hourly by default), each on its
+imported into live-tv (twice daily and hourly by default), each on its
 own user-settable interval -- see "Config and tasks are optional" in
 AGENTS.md for how that's declared.
 

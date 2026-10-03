@@ -29,7 +29,7 @@
  *   sides are separate files (`live.mhdtv.online/storage/images/events/...`)
  *   -- and a scraper cannot compose one (the contract carries URLs). So the
  *   card gives BOTH: `logos = [home, away]`, which the host draws side by side
- *   on one tile (`ScrapedChannel.logos`, live-tv 1.8.0 / plugin 1.17.0), and
+ *   on one tile (`ScrapedChannel.logos`, live-tv 1.8.0), and
  *   `logo` = the home side for a host that predates the field.
  *
  * THE SOURCES (watch page)

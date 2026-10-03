@@ -1,5 +1,5 @@
 {
-    "name": "stremio-tv-scrapers",
+    "name": "live-tv-scrapers",
     "private": true,
     "type": "module",
     "scripts": {

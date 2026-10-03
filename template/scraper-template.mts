@@ -1,6 +1,6 @@
 /**
- * TEMPLATE: a live-TV scraper for stremio-tv.
- * ============================================
+ * TEMPLATE: a live-TV scraper for live-tv.
+ * ========================================
  *
  * This file is self-contained on purpose -- it imports nothing from the
  * repository it is meant to join. Develop it anywhere, test it with plain
@@ -119,7 +119,7 @@ interface ScrapedStream {
     labels: string[];
     /** HTTP Referer this stream needs, or "". Sent on EVERY request the
      *  stream makes -- playlist, variants, segments, keys -- because the
-     *  Live TV plugin relays all of them (stremio-tv plugin API 1.2.0). */
+     *  live-tv relays all of them. */
     referrer: string;
     /** User-Agent this stream needs, or "". Sent the same way. */
     userAgent: string;
@@ -133,8 +133,7 @@ interface ScrapedStream {
      * and are dropped on a redirect to another host; ClearKey streams get
      * neither. STATIC: a header that must differ on every request cannot be
      * carried -- a per-play cookie belongs in a resolver, which may return
-     * `headers` too. Needs live-tv 1.9.0 (the standalone app); the plugin
-     * ignores the field, and so does an older host.
+     * `headers` too. Needs live-tv 1.9.0; an older host ignores the field.
      */
     headers?: Record<string, string>;
     /**
@@ -145,13 +144,13 @@ interface ScrapedStream {
      *
      * For a CDN that disguises its video: dlhd's segments are real PNG
      * images with the MPEG-TS packed into their pixels (see `dlhd.mts`).
-     * The plugin relays the stream, reads each playlist as it passes so it
+     * live-tv relays the stream, reads each playlist as it passes so it
      * knows every segment URL in it, and runs your decoder on each segment
      * on the way to the player. Playlists themselves are never decoded.
      *
      * A NAME, not the function, because your catalogue is stored as JSON
-     * between runs. A name with no matching decoder -- or a stremio-tv too
-     * old to relay segments through the plugin -- drops the stream rather
+     * between runs. A name with no matching decoder -- or a live-tv too
+     * old to relay segments -- drops the stream rather
      * than handing a player a picture.
      */
     decoder?: string;
@@ -198,7 +197,7 @@ interface ScrapedStream {
      * Widevine, PlayReady and FairPlay are not ClearKey and are not
      * supported by anything here -- do not hand one over.
      *
-     * Needs stremio-tv plugin API 1.6.0 and an `ffmpeg` on the host; without
+     * Needs live-tv 1.8.0 and an `ffmpeg` on the host; without
      * both the stream is dropped, not offered broken. The host checks such a
      * stream as far as its manifest (reachable, really an MPD); whether the
      * key is right is only found out when someone plays it.
@@ -222,7 +221,7 @@ interface ClearKey {
  * `url` is the segment's own address. Throw if the bytes are not what you
  * expected: that one segment then fails, and the player moves on.
  *
- * Runs on the stremio-tv server for every segment of every viewer, so keep
+ * Runs on the live-tv server for every segment of every viewer, so keep
  * it pure computation over the bytes: no network, no state between calls.
  * `node:zlib` and `node:crypto` cover what this usually takes.
  */

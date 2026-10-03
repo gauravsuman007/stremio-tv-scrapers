@@ -45,8 +45,8 @@
  *            edge.<host>/premium<N>/index.m3u8"`. The DaddyLive backend of
  *            dlhd.mts: every segment is a PNG with the TS hidden in its
  *            pixels, so these streams carry the `tiktikpx` decoder (copied
- *            from dlhd.mts; needs stremio-tv plugin API 1.2.0 / Live TV
- *            plugin 1.6.0, older ones drop them rather than offer them).
+ *            from dlhd.mts; needs live-tv 1.6.0; older hosts drop them
+ *            rather than offer them).
  *   trendy   `trendy48.online/live-tv?ch=<slug>` (mirror: `trend48.st`) ->
  *            iframe `trendy48.site/embed/<slug>` -> script-built iframe
  *            `exmxbxe.cfd/trefoxy/<slug>` (redirects to a signed path),
@@ -841,7 +841,7 @@ function webpExif(bytes: Uint8Array): Uint8Array | null {
     return null;
 }
 
-/** Exported for the standalone check below; the plugin calls it through
+/** Exported for the standalone check below; the host calls it through
  *  `decoders.tiktikpx`. */
 export function unwrapSegment(bytes: Uint8Array): Uint8Array {
     if (isTs(bytes)) return bytes;

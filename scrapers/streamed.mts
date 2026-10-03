@@ -61,7 +61,7 @@
  * Handles, not URLs: the playlist's `secure/<token>` is minted per request
  * and short-lived, so each stream's `url` is a handle
  * (`https://streamed.invalid/<source>/<id>/<n>`) resolved at play time by
- * `resolvers.streamed`. Needs live-tv >= 1.10 / Live TV plugin >= 1.6.0.
+ * `resolvers.streamed`. Needs live-tv >= 1.10.
  *
  * What returns nothing: a source whose embed answers `Not Found` for the
  * playlist (a listed stream that is not actually on air), `/fetch`

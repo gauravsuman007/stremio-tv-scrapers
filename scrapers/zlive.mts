@@ -963,7 +963,7 @@ function webpExif(bytes: Uint8Array): Uint8Array | null {
     return null;
 }
 
-/** Exported for the standalone check below; the plugin calls it through
+/** Exported for the standalone check below; the host calls it through
  *  `decoders.tiktikpx`. */
 function unwrapSegment(bytes: Uint8Array): Uint8Array {
     if (isTs(bytes)) return bytes;

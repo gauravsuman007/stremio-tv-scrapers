@@ -25,7 +25,7 @@ jobs:
 
             # dist/ IS BUILT HERE, NEVER ON A DEVELOPER'S MACHINE.
             #
-            # stremio-tv's "Import from GitHub" reads dist/*.mjs straight off
+            # live-tv's "Import from GitHub" reads dist/*.mjs straight off
             # this repo's main branch (no clone, no build step on that end),
             # so it has to be committed -- but from a clean build, by this
             # job. Pull requests only prove the build works. The commit
