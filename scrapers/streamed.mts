@@ -87,6 +87,16 @@ interface ScrapedStream {
     resolver?: string;
 }
 
+/** Who is in a live event and when, so the host can merge it with the same fixture from other sources. */
+interface ScrapedEvent {
+    sides?: string[];
+    title?: string;
+    competition?: string;
+    sport?: string;
+    /** Epoch milliseconds; omitted when unknown. */
+    start?: number;
+}
+
 interface ScrapedChannel {
     id: string;
     name: string;
@@ -97,6 +107,7 @@ interface ScrapedChannel {
     languages: string[];
     logo: string;
     logos?: string[];
+    event?: ScrapedEvent;
     website: string;
     network: string;
     streams: ScrapedStream[];
@@ -538,10 +549,13 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
         const poster = match.poster ? `${apiBase}${match.poster}` : "";
         const category = match.category || "other";
         const id = idFor(match.id);
+        const homeName = match.teams?.home?.name?.trim() || "";
+        const awayName = match.teams?.away?.name?.trim() || "";
+        const sides = homeName && awayName ? [homeName, awayName] : [];
 
         channels.push({
             id,
-            name: match.title.trim(),
+            name: sides.length ? sides.join(" vs ") : match.title.trim(),
             country: "",
             countryName: "",
             countryFlag: "",
@@ -549,6 +563,12 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
             languages: [],
             logo: home || poster,
             ...(home && away ? { logos: [home, away] } : {}),
+            // Who and when, so the host merges this with the same fixture from other sources.
+            event: {
+                ...(sides.length ? { sides } : { title: match.title.trim() }),
+                sport: category,
+                ...(match.date && match.date > 0 ? { start: match.date } : {})
+            },
             website: `${apiBase}/watch/${match.id}`,
             network: "",
             streams
@@ -629,7 +649,7 @@ function build(): Promise<ScrapedCatalogue> {
 export const streamedScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Streamed",
-    version: "1.0.0",
+    version: "1.1.0",
     configSchema,
     tasks,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },

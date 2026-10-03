@@ -34,6 +34,65 @@ interface ScrapedStream {
     userAgent: string;
 }
 
+/** Who is in a live event and when, so the host can merge it with the same fixture from other sources. */
+interface ScrapedEvent {
+    sides?: string[];
+    title?: string;
+    competition?: string;
+    sport?: string;
+    /** Epoch milliseconds; omitted when unknown. */
+    start?: number;
+}
+
+/**
+ * "UEFA Nations League : Scotland vs North Macedonia", "UFC 332: Silva vs Wang",
+ * "Croatia vs England - UEFA Nations League" -> the sides and the competition,
+ * or null when the text is not a fixture. The sides are what the host matches
+ * on; the competition is only shown.
+ */
+function readFixture(raw: string): { sides: string[]; competition: string } | null {
+    const versus = /\s+(?:vs\.?|v|versus|@)\s+/i;
+    let name = raw.replace(/[\u{1F1E6}-\u{1F1FF}\u{E0000}-\u{E007F}\u{FE00}-\u{FE0F}\u{200B}-\u{200F}\u{1F3F4}]/gu, "").replace(/\s+/g, " ").trim();
+    const first = name.search(versus);
+    if (first < 0) return null;
+
+    let competition = "";
+    const head = name.slice(0, first);
+    const cut = Math.max(head.lastIndexOf(" : "), head.lastIndexOf(": "), head.lastIndexOf(" | "));
+    if (cut > 0) {
+        competition = head.slice(0, cut).trim();
+        name = name.slice(cut).replace(/^\s*[:|]\s*/, "").trim();
+    }
+
+    const tail = /^(.*?)(?:\s+[-\u2013|]\s+|\s+\()([^)]{3,60})\)?$/.exec(name);
+    if (tail && versus.test(tail[1] || "")) {
+        competition = competition || (tail[2] || "").trim();
+        name = (tail[1] || "").trim();
+    }
+
+    const sides = name.split(versus).map((side) => side.trim()).filter(Boolean);
+    if (sides.length < 2 || sides.length > 8) return null;
+    if (sides.some((side) => side.length < 2 || side.length > 60 || /^(?:simulcast|tba|tbd|tbc|live|hd|fhd|uhd|sd|4k|tv|\d+)$/i.test(side))) return null;
+
+    return { sides, competition };
+}
+
+/** The `event` and the display name for a card whose only fact is its title. */
+function eventFor(title: string, extra: { sport?: string; competition?: string; start?: number } = {}): { name: string; event: ScrapedEvent } {
+    const fixture = readFixture(title);
+    const competition = fixture?.competition || extra.competition || "";
+
+    return {
+        name: fixture ? fixture.sides.join(" vs ") : title,
+        event: {
+            ...(fixture ? { sides: fixture.sides } : { title }),
+            ...(competition ? { competition } : {}),
+            ...(extra.sport ? { sport: extra.sport } : {}),
+            ...(extra.start && extra.start > 0 ? { start: extra.start } : {})
+        }
+    };
+}
+
 interface ScrapedChannel {
     id: string;
     name: string;
@@ -43,6 +102,7 @@ interface ScrapedChannel {
     categories: string[];
     languages: string[];
     logo: string;
+    event?: ScrapedEvent;
     website: string;
     network: string;
     streams: ScrapedStream[];
@@ -187,9 +247,14 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
                 if (!streams.length) continue;
                 seen.add(event.uri_name);
 
+                const sport = (group.category || category).toLowerCase();
+                const start = live ? 0 : asUtc(event.starts_at);
+                const described = eventFor(event.name.trim(), { sport, competition: event.tag || "", start: Number.isFinite(start) ? start : 0 });
+
                 channels.push({
                     id: idFor(event.uri_name),
-                    name: event.name.trim(),
+                    name: described.name,
+                    event: described.event,
                     country: "",
                     countryName: "",
                     countryFlag: "",
@@ -197,7 +262,7 @@ async function fetchEvents(): Promise<ScrapedCatalogue> {
                     languages: [],
                     logo: event.poster || "",
                     website: `${BASE}/live/${event.uri_name}`,
-                    network: event.tag || "",
+                    network: described.event.competition || event.tag || "",
                     streams
                 });
             }
@@ -266,7 +331,7 @@ function build(): Promise<ScrapedCatalogue> {
 export const futbolxScraper: Scraper = {
     id: SCRAPER_ID,
     name: "Futbol-X",
-    version: "1.0.1",
+    version: "1.1.0",
     configSchema,
     tasks,
     build

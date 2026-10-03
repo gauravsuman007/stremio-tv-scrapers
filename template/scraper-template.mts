@@ -247,6 +247,38 @@ type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
 
 type SegmentDecoder = (segment: Uint8Array, url: string) => Uint8Array | Promise<Uint8Array>;
 
+/**
+ * WHAT A LIVE EVENT IS, SAID BY THE SOURCE THAT KNOWS. A fixture is not its
+ * name: seven sources write "Canada vs Peru", "Peru vs Canada", "UEFA Nations
+ * League : Peru vs Canada" and the host cannot tell them from three
+ * different matches by the text alone. So say who is in it and when.
+ *
+ * Name the card `Team A vs Team B` (any number of sides, "A vs B vs C") -- the
+ * participants only, no competition or round glued on, no flag or "HD" -- and
+ * put the rest here. The host matches two cards as ONE event when their
+ * `sides` agree in any order (accents, "FC", "Czech Republic"/"Czechia" are
+ * folded) and, if both give a `start`, those are within eight hours.
+ *
+ * Every field is optional; give what the source actually has and never invent
+ * one -- a guessed `start` splits a fixture in two, a guessed side merges two.
+ * A card with no `event` still merges when its `name` reads "A vs B", but
+ * `event` is the sure way.
+ */
+interface ScrapedEvent {
+    /** The participants, as the source writes them: ["Canada", "Peru"]. Two or
+     *  more, or leave it out (a race, a card, a festival has none). */
+    sides?: string[];
+    /** The event's own title when there are no sides: "World Grand Prix, Day 6".
+     *  Used to match title-only events from different sources. */
+    title?: string;
+    /** "UEFA Nations League", "UFC 332", "Friendlies". Shown, never matched on. */
+    competition?: string;
+    /** "football", "cricket", "mma", "darts" ... lowercase, free text. */
+    sport?: string;
+    /** Scheduled start, EPOCH MILLISECONDS. Omit when unknown -- never 0. */
+    start?: number;
+}
+
 interface ScrapedChannel {
     /** Must start with `live:<your-scraper-id>:` -- see `idFor`. */
     id: string;
@@ -279,6 +311,12 @@ interface ScrapedChannel {
      * merged card takes `logo` and `logos` from whichever source has them.
      */
     logos?: string[];
+    /**
+     * OPTIONAL. What a live EVENT is, stated rather than left to be read out
+     * of `name` -- the way cards from different sources become one card.
+     * Leave it out for an ordinary channel. See `ScrapedEvent`.
+     */
+    event?: ScrapedEvent;
     website: string;
     network: string;
     /** At least one, or the channel is dropped centrally -- no need to

@@ -109,6 +109,16 @@ interface ScrapedStream {
     clearKey?: ClearKey;
 }
 
+/** Who is in a live event and when, so the host can merge it with the same fixture from other sources. */
+interface ScrapedEvent {
+    sides?: string[];
+    title?: string;
+    competition?: string;
+    sport?: string;
+    /** Epoch milliseconds; omitted when unknown. */
+    start?: number;
+}
+
 interface ScrapedChannel {
     id: string;
     name: string;
@@ -120,6 +130,7 @@ interface ScrapedChannel {
     logo: string;
     /** A fixture's two flags, drawn side by side by the host (`ScrapedChannel.logos`). */
     logos?: string[];
+    event?: ScrapedEvent;
     website: string;
     network: string;
     streams: ScrapedStream[];
@@ -755,6 +766,13 @@ async function fetchAll(): Promise<Fetched> {
             // Both sides' flags on one tile (the host draws the pair); `logo` is the home side for a host that predates `logos`.
             logo: first.logo,
             ...(first.logo && second.logo ? { logos: [first.logo, second.logo] } : {}),
+            // Who and when, so the host merges this with the same fixture from other sources.
+            event: {
+                sides: [titleCase(first.name), titleCase(second.name)],
+                ...(event.league ? { competition: event.league } : {}),
+                sport,
+                ...(event.start > 0 ? { start: event.start } : {})
+            },
             website: `${WATCH}/watch/${event.slug}`,
             network: SCRAPER_NAME,
             streams
@@ -859,7 +877,7 @@ async function build(): Promise<ScrapedCatalogue> {
 export const cricwebScraper: Scraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.2.0",
+    version: "1.3.0",
     configSchema,
     tasks,
     build

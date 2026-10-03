@@ -129,6 +129,16 @@ type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
 
 type SegmentDecoder = (segment: Uint8Array, url: string) => Uint8Array | Promise<Uint8Array>;
 
+/** Who is in a live event and when, so the host can merge it with the same fixture from other sources. */
+interface ScrapedEvent {
+    sides?: string[];
+    title?: string;
+    competition?: string;
+    sport?: string;
+    /** Epoch milliseconds; omitted when unknown. */
+    start?: number;
+}
+
 interface ScrapedChannel {
     id: string;
     name: string;
@@ -140,6 +150,7 @@ interface ScrapedChannel {
     logo: string;
     /** A fixture's two flags, drawn side by side by the host (`ScrapedChannel.logos`). */
     logos?: string[];
+    event?: ScrapedEvent;
     website: string;
     network: string;
     streams: ScrapedStream[];
@@ -316,7 +327,7 @@ interface SourceRow {
     embed: string;
 }
 
-async function fetchEventPage(slug: string): Promise<{ title: string; rows: SourceRow[]; flags: string[] }> {
+async function fetchEventPage(slug: string): Promise<{ title: string; rows: SourceRow[]; flags: string[]; names: string[] }> {
     const { text } = await getText(`${SITE}/events/${encodeURIComponent(slug)}`);
     const title = decodeEntities(/<title>([^<]*)<\/title>/.exec(text)?.[1] || "")
         .replace(/\s*[-|]\s*CricHD\.at\s*$/i, "")
@@ -351,7 +362,7 @@ async function fetchEventPage(slug: string): Promise<{ title: string; rows: Sour
         rows.push({ link: cells[0]!, channel: cells[1]!, quality: cells[3]!, language: cells[5]!, embed });
     }
 
-    return { title, rows, flags };
+    return { title, rows, flags, names: flags.length === 2 ? sides.map((side) => side.name.trim()) : [] };
 }
 
 // --- which embeds, and the handles for them --------------------------------------
@@ -983,6 +994,13 @@ async function fetchLive(): Promise<Fetched> {
             // Both flags drawn together where the page has two sides; the league's own picture otherwise.
             logo: page.flags[0] || event.leagueLogo,
             ...(page.flags.length === 2 ? { logos: page.flags } : {}),
+            // Who and when, so the host merges this with the same fixture from other sources.
+            event: {
+                ...(page.names.length === 2 ? { sides: page.names } : { title: page.title || event.slug.replace(/-/g, " ") }),
+                ...(event.league ? { competition: event.league } : {}),
+                sport: "cricket",
+                ...(event.start > 0 ? { start: event.start } : {})
+            },
             website: `${SITE}/events/${event.slug}`,
             network: SCRAPER_NAME,
             streams
@@ -1061,7 +1079,7 @@ async function build(): Promise<ScrapedCatalogue> {
 export const crichdScraper: Scraper = {
     id: SCRAPER_ID,
     name: SCRAPER_NAME,
-    version: "1.1.0",
+    version: "1.2.0",
     configSchema,
     tasks,
     decoders: { [DECODER]: (segment) => unwrapSegment(segment) },
