@@ -672,3 +672,31 @@ Before this, a source that restreamed DRM-protected video with a published
 ClearKey was unscrapable here (cricweb's `drm/player.php` family, 20 of its 45
 fixture sources). A ClearKey stream is now just a stream; a Widevine,
 PlayReady or FairPlay one still cannot be delivered by anything in this chain.
+
+
+## Live events: compute the key here, the host only compares it
+
+The host (live-tv) knows no sport and no team. Whether "Canada vs Peru" and
+"Peru v. Canada" are one match is YOUR scraper's job, and you state it in
+`ScrapedChannel.event.key` (see `ScrapedEvent` in the template). Every events
+scraper carries the same `event-key` block between `// BEGIN event-key` and
+`// END event-key` markers -- scrapers are standalone files and cannot import
+one another, so it is copied. **Edit `scripts/event-key.block.ts`, then run
+`node scripts/sync-event-key.mjs`** (`npm test` fails when a copy differs, and
+runs `test/event-key.mts`, which holds the rules: aliases, "FC", rankings, "(w)",
+accents, "v." and "@", and everything that must NOT merge). A new events scraper
+opts in by adding the two marker lines before its `ScrapedChannel` interface and
+calling `eventFor(title, { sides?, competition?, sport?, start? })`, which
+returns the display name (the sides joined with " vs ") and the `event` object.
+
+## Two jobs: `build()` is the channels, `buildEvents()` the live events
+
+A scraper whose events change by the minute while its channels change by the
+day exports `buildEvents` and gives `build()` the channels only; live-tv runs
+them as separate jobs with their own schedules (`channelsIntervalMinutes` /
+`eventsIntervalMinutes` in your `configSchema`, else 12 h / 15 min), buttons and
+status. Both are called with `{ config }`. `tasks` and module-level caches are no
+longer needed for this: a scraper that used them to refresh the two halves apart
+(ntvst, dlhd, ...) now just returns fresh data from each function. A source that
+is all events returns `{ channels: [] }` from `build()`. If a long crawl can outlive
+the host's time limit (ntvst), keep it single-flight so the next call joins it.

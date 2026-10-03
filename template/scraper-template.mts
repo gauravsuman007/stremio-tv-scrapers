@@ -250,26 +250,35 @@ type SegmentDecoder = (segment: Uint8Array, url: string) => Uint8Array | Promise
 /**
  * WHAT A LIVE EVENT IS, SAID BY THE SOURCE THAT KNOWS. A fixture is not its
  * name: seven sources write "Canada vs Peru", "Peru vs Canada", "UEFA Nations
- * League : Peru vs Canada" and the host cannot tell them from three
- * different matches by the text alone. So say who is in it and when.
+ * League : Peru vs Canada". Working out that these are one match -- team
+ * aliases, women's and youth sides, rankings, how a site writes a title -- is
+ * YOUR job, because only you can see your data; the host knows no sport and no
+ * team and only compares what you say.
  *
- * Name the card `Team A vs Team B` (any number of sides, "A vs B vs C") -- the
- * participants only, no competition or round glued on, no flag or "HD" -- and
- * put the rest here. The host matches two cards as ONE event when their
- * `sides` agree in any order (accents, "FC", "Czech Republic"/"Czechia" are
- * folded) and, if both give a `start`, those are within eight hours.
+ * So compute a `key` and put it here. Name the card `Team A vs Team B` (any
+ * number of sides) -- the participants only, no competition, round, flag or
+ * "HD" -- and let the key carry the identity.
  *
- * Every field is optional; give what the source actually has and never invent
- * one -- a guessed `start` splits a fixture in two, a guessed side merges two.
- * A card with no `event` still merges when its `name` reads "A vs B", but
- * `event` is the sure way.
+ * The key is an opaque string, equal for two cards of the same event, from
+ * whichever scraper wrote them. The convention every scraper here follows (the
+ * `event-key` block, kept identical across them) is `v:` plus the sides' folded
+ * identities, sorted and joined with `|`; for an event with no opponents
+ * `t:` plus its folded title without the year. Use the same convention if you
+ * want your events to merge with theirs; a different one merges only with
+ * itself. Two cards with the same key merge unless both give a `start` more
+ * than eight hours apart (a rematch, a replay). A card with no key is an
+ * ordinary channel to the host.
+ *
+ * Every other field is optional and informational; give what the source has
+ * and never invent one.
  */
 interface ScrapedEvent {
-    /** The participants, as the source writes them: ["Canada", "Peru"]. Two or
-     *  more, or leave it out (a race, a card, a festival has none). */
+    /** The identity: equal for two cards of one event. See above. */
+    key?: string;
+    /** The participants, as the source writes them: ["Canada", "Peru"]. Used
+     *  for the card's name only. */
     sides?: string[];
-    /** The event's own title when there are no sides: "World Grand Prix, Day 6".
-     *  Used to match title-only events from different sources. */
+    /** The event's own title when there are no sides: "World Grand Prix, Day 6". */
     title?: string;
     /** "UEFA Nations League", "UFC 332", "Friendlies". Shown, never matched on. */
     competition?: string;

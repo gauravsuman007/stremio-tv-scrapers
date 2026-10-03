@@ -21,6 +21,8 @@ jobs:
 
             - run: npm ci
 
+            - run: npm test
+
             - run: npm run build
 
             # dist/ IS BUILT HERE, NEVER ON A DEVELOPER'S MACHINE.
